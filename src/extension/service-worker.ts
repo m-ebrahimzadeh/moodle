@@ -481,11 +481,13 @@ function extractExtensionFromFilename(name: string | null | undefined): string |
   if (!name) {
     return null;
   }
-  const clean = name.split(/[?#]/)[0]?.trim() ?? '';
+  const clean = name.trim();
   const dotIdx = clean.lastIndexOf('.');
   if (dotIdx > 0 && dotIdx < clean.length - 1) {
-    const ext = clean.slice(dotIdx + 1).replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
-    return ext || null;
+    const rawExt = clean.slice(dotIdx + 1).trim();
+    if (/^[a-zA-Z0-9]{1,12}$/.test(rawExt)) {
+      return rawExt.toLowerCase();
+    }
   }
   return null;
 }
@@ -589,6 +591,34 @@ export async function resolveMoodleResourceDownload(
 
   const extracted = extractPluginfileResourceUrl(html, DEFAULT_MOODLE_BASE_URL);
   if (!extracted) {
+    const cdHeader = response.headers.get('content-disposition');
+    const hasAttachmentDisposition = Boolean(cdHeader && /^\s*attachment\b/i.test(cdHeader));
+    const isDirectPluginfileHtml = /\/pluginfile\.php\//i.test(finalUrl) || hasAttachmentDisposition;
+
+    if (isDirectPluginfileHtml) {
+      const safeUrl = validateAllowedMediaUrl(finalUrl, ALLOWED_MEDIA_ORIGINS);
+      const cdFilename = parseContentDispositionFilename(cdHeader);
+      const urlBasename = safeDecodePathBasename(safeUrl);
+      const fileName = cdFilename || urlBasename || null;
+      const ext =
+        extractExtensionFromFilename(cdFilename) ||
+        extractExtensionFromFilename(urlBasename) ||
+        'html';
+      const lengthHeader = response.headers.get('content-length');
+      const parsedLen = lengthHeader ? Number.parseInt(lengthHeader, 10) : 0;
+      const sizeBytes =
+        Number.isFinite(parsedLen) && parsedLen > 0
+          ? parsedLen
+          : await probeContentLength(safeUrl, fetchImpl);
+
+      return {
+        url: safeUrl,
+        fileName,
+        ext,
+        sizeBytes,
+      };
+    }
+
     throw new Error(`No downloadable file link found for resource ${material.cmid}.`);
   }
 
@@ -762,13 +792,20 @@ export async function resolveDownloadUrlFromDescriptor(
   if (descriptor.kind === 'material') {
     if (descriptor.material.type === 'folder') {
       const files = await resolveMoodleFolderFiles(descriptor.material, fetchImpl);
+      const hasIndex = typeof descriptor.folderFileIndex === 'number';
+      const hasExpectedName = Boolean(descriptor.expectedFileName);
       const target =
-        (typeof descriptor.folderFileIndex === 'number'
-          ? files.find((f) => f.fileIndex === descriptor.folderFileIndex)
-          : undefined) ??
-        (descriptor.expectedFileName
-          ? files.find((f) => f.name === descriptor.expectedFileName)
-          : undefined);
+        hasIndex && hasExpectedName
+          ? (files.find(
+              (f) =>
+                f.fileIndex === descriptor.folderFileIndex &&
+                f.name === descriptor.expectedFileName,
+            ) ?? files.find((f) => f.name === descriptor.expectedFileName))
+          : hasExpectedName
+            ? files.find((f) => f.name === descriptor.expectedFileName)
+            : hasIndex
+              ? files.find((f) => f.fileIndex === descriptor.folderFileIndex)
+              : undefined;
 
       if (!target) {
         throw new Error('Requested folder file is no longer available.');

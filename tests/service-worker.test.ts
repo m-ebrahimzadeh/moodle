@@ -511,5 +511,220 @@ describe('service-worker helpers', () => {
         globalThis.fetch = originalFetch;
       }
     });
+
+    it('handles direct /pluginfile.php/*.html RMarkdown downloads, Content-Type-only fallback, and HTTP/filename edge cases [ARCH-006-04 / QA-6]', async () => {
+      // 1. Direct knitted RMarkdown .html at /pluginfile.php/ (Content-Type: text/html)
+      const rmdHtmlFetch = vi.fn<typeof fetch>(async () => {
+        const res = new Response('<html><head><title>Lab 3 RMarkdown</title></head><body><h1>Analysis</h1></body></html>', {
+          status: 200,
+          headers: {
+            'Content-Type': 'text/html; charset=utf-8',
+            'Content-Length': '54321',
+          },
+        });
+        Object.defineProperty(res, 'url', {
+          value: 'https://psico.elearning.unipd.it/pluginfile.php/900/mod_resource/content/0/analysis_report.html',
+        });
+        return res;
+      });
+      const rmdResolved = await resolveMoodleResourceDownload(
+        makeMaterial({ title: 'Lab 3 Report', fileTypeHint: null }),
+        rmdHtmlFetch,
+      );
+      expect(rmdResolved).toEqual({
+        url: 'https://psico.elearning.unipd.it/pluginfile.php/900/mod_resource/content/0/analysis_report.html',
+        fileName: 'analysis_report.html',
+        ext: 'html',
+        sizeBytes: 54321,
+      });
+
+      // 2. Content-Disposition: attachment HTML response without /pluginfile.php/ in URL
+      const attachmentHtmlFetch = vi.fn<typeof fetch>(async () => {
+        const res = new Response('<html><body>Report</body></html>', {
+          status: 200,
+          headers: {
+            'Content-Type': 'text/html; charset=utf-8',
+            'Content-Disposition': 'attachment; filename="notebook.html"',
+          },
+        });
+        Object.defineProperty(res, 'url', {
+          value: 'https://psico.elearning.unipd.it/mod/resource/view.php?id=500100&redirect=1',
+        });
+        return res;
+      });
+      const attachmentResolved = await resolveMoodleResourceDownload(
+        makeMaterial({ fileTypeHint: null }),
+        attachmentHtmlFetch,
+      );
+      expect(attachmentResolved.ext).toBe('html');
+      expect(attachmentResolved.fileName).toBe('notebook.html');
+
+      // 3. Content-Type-only extension fallback (application/pdf, generic URL, no Content-Disposition, no hint)
+      const contentTypeOnlyFetch = vi.fn<typeof fetch>(async () => ({
+        ok: true,
+        status: 200,
+        url: 'https://psico.elearning.unipd.it/pluginfile.php/888/mod_resource/content/0/download',
+        headers: new Headers({ 'Content-Type': 'application/pdf' }),
+        text: vi.fn(),
+      }) as unknown as Response);
+      const ctResolved = await resolveMoodleResourceDownload(
+        makeMaterial({ fileTypeHint: null }),
+        contentTypeOnlyFetch,
+      );
+      expect(ctResolved.ext).toBe('pdf');
+
+      // 4. Question mark in decoded filename preserved when resolving extension
+      const questionFilenameFetch = vi.fn<typeof fetch>(async () => ({
+        ok: true,
+        status: 200,
+        url: 'https://psico.elearning.unipd.it/pluginfile.php/888/mod_resource/content/0/Are%20Emotions%20Natural%20Kinds%3F.pdf',
+        headers: new Headers({ 'Content-Type': 'application/octet-stream' }),
+        text: vi.fn(),
+      }) as unknown as Response);
+      const qResolved = await resolveMoodleResourceDownload(
+        makeMaterial({ fileTypeHint: null }),
+        questionFilenameFetch,
+      );
+      expect(qResolved.fileName).toBe('Are Emotions Natural Kinds?.pdf');
+      expect(qResolved.ext).toBe('pdf');
+
+      // 5. Guest HTML 200 & HTTP 403 / 500 on resolveMoodleResourceDownload
+      const guestResourceFetch = vi.fn<typeof fetch>(async () => {
+        const res = new Response(REDACTED_GUEST_MY_COURSES_HTML, {
+          status: 200,
+          headers: { 'Content-Type': 'text/html' },
+        });
+        Object.defineProperty(res, 'url', {
+          value: 'https://psico.elearning.unipd.it/mod/resource/view.php?id=500100',
+        });
+        return res;
+      });
+      await expect(resolveMoodleResourceDownload(makeMaterial(), guestResourceFetch)).rejects.toThrow(
+        /session expired/i,
+      );
+
+      for (const status of [403, 500]) {
+        let abortSignal: AbortSignal | undefined;
+        const errFetch = vi.fn<typeof fetch>(async (_input, init) => {
+          abortSignal = init?.signal ?? undefined;
+          return new Response('Forbidden', { status });
+        });
+        await expect(resolveMoodleResourceDownload(makeMaterial(), errFetch)).rejects.toThrow(
+          new RegExp(`HTTP ${status}`),
+        );
+        expect(abortSignal?.aborted).toBe(true);
+      }
+    });
+
+    it('rejects cross-origin redirect, non-HTML response, and 403/500 on resolveMoodleFolderFiles, and matches expectedFileName on reorder [ARCH-006-03 / QA-6]', async () => {
+      const folderMat = makeMaterial({
+        cmid: 296773,
+        type: 'folder',
+        title: 'Slide Deck Archive',
+        url: 'https://psico.elearning.unipd.it/mod/folder/view.php?id=296773',
+      });
+
+      // 1. Cross-origin redirect
+      let crossSignal: AbortSignal | undefined;
+      const crossFolderFetch = vi.fn<typeof fetch>(async (_input, init) => {
+        crossSignal = init?.signal ?? undefined;
+        const res = new Response('<html></html>', {
+          status: 200,
+          headers: { 'Content-Type': 'text/html' },
+        });
+        Object.defineProperty(res, 'url', { value: 'https://evil.example/folder' });
+        return res;
+      });
+      await expect(resolveMoodleFolderFiles(folderMat, crossFolderFetch)).rejects.toThrow(
+        /outside the UniPD Moodle origin/i,
+      );
+      expect(crossSignal?.aborted).toBe(true);
+
+      // 2. Non-HTML response
+      let nonHtmlSignal: AbortSignal | undefined;
+      const textSpy = vi.fn(async () => 'SHOULD_NOT_READ');
+      const nonHtmlFolderFetch = vi.fn<typeof fetch>(async (_input, init) => {
+        nonHtmlSignal = init?.signal ?? undefined;
+        return {
+          ok: true,
+          status: 200,
+          url: folderMat.url,
+          headers: new Headers({ 'Content-Type': 'application/pdf' }),
+          text: textSpy,
+        } as unknown as Response;
+      });
+      await expect(resolveMoodleFolderFiles(folderMat, nonHtmlFolderFetch)).rejects.toThrow(
+        /unexpected non-html response/i,
+      );
+      expect(nonHtmlSignal?.aborted).toBe(true);
+      expect(textSpy).not.toHaveBeenCalled();
+
+      // 3. HTTP 403 and 500
+      for (const status of [403, 500]) {
+        let abortSignal: AbortSignal | undefined;
+        const errFetch = vi.fn<typeof fetch>(async (_input, init) => {
+          abortSignal = init?.signal ?? undefined;
+          return new Response('Error', { status });
+        });
+        await expect(resolveMoodleFolderFiles(folderMat, errFetch)).rejects.toThrow(
+          new RegExp(`HTTP ${status}`),
+        );
+        expect(abortSignal?.aborted).toBe(true);
+      }
+
+      // 4. Folder file reorder: expectedFileName moved from fileIndex 1 -> fileIndex 2
+      const reorderedHtml = `
+        <section id="region-main">
+          <div class="foldertree">
+            <ul>
+              <li><a href="/pluginfile.php/77777/mod_folder/content/0/00_new_intro.pdf">00_new_intro.pdf</a></li>
+              <li><a href="/pluginfile.php/77777/mod_folder/content/0/Datasets/week_01%20data.sav">week_01 data.sav</a></li>
+            </ul>
+          </div>
+        </section>`;
+      const reorderedFetch = vi.fn<typeof fetch>(async (input) => {
+        const res = new Response(reorderedHtml, {
+          status: 200,
+          headers: { 'Content-Type': 'text/html' },
+        });
+        Object.defineProperty(res, 'url', { value: String(input) });
+        return res;
+      });
+
+      const reorderedTarget = await resolveDownloadUrlFromDescriptor(
+        {
+          kind: 'material',
+          material: folderMat,
+          filename: 'UniPD/2026-2027/PSQ4107809 - Testing/02 - Week 2/Materials/Slide Deck Archive/Datasets/week_01 data.sav',
+          folderFileIndex: 1,
+          expectedFileName: 'week_01 data.sav',
+          pathContext: {
+            academicYear: '2026-2027',
+            courseCode: 'PSQ4107809',
+            courseTitle: 'Testing',
+          },
+        },
+        reorderedFetch,
+      );
+      expect(reorderedTarget).toEqual({
+        url: 'https://psico.elearning.unipd.it/pluginfile.php/77777/mod_folder/content/0/Datasets/week_01%20data.sav',
+        resolvedFilename:
+          'UniPD/2026-2027/PSQ4107809 - Testing/02 - Week 2/Materials/Slide Deck Archive/Datasets/week_01 data.sav',
+      });
+
+      // 5. Deleted expectedFileName does not silently download another file occupying fileIndex 1
+      await expect(
+        resolveDownloadUrlFromDescriptor(
+          {
+            kind: 'material',
+            material: folderMat,
+            filename: 'UniPD/2026-2027/PSQ4107809 - Testing/02 - Week 2/Materials/Slide Deck Archive/deleted.pdf',
+            folderFileIndex: 1,
+            expectedFileName: 'deleted.pdf',
+          },
+          reorderedFetch,
+        ),
+      ).rejects.toThrow(/no longer available/i);
+    });
   });
 });

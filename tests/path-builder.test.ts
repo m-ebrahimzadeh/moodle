@@ -166,5 +166,31 @@ describe('path-builder', () => {
       expect(path).toMatch(/\.sav$/);
       expect(path.startsWith('UniPD/2026-2027/')).toBe(true);
     });
+
+    it('enforces <= 180-char budget on single mod_resource with long course, section, and title', () => {
+      const path = buildMaterialDownloadPath({
+        academicYear: '2026-2027',
+        courseCode: 'PSQ4107809',
+        courseTitle:
+          'PRINCIPLES AND APPLICATIONS OF PSYCHOLOGICAL TESTING AND CLINICAL NEUROPSYCHOLOGICAL ASSESSMENT',
+        sectionIndex: 12,
+        sectionTitle:
+          'Comprehensive Longitudinal Assessment and Psychometric Modeling Methods — Advanced Seminar',
+        activityIndex: 7,
+        materialTitle:
+          'Detailed Lecture Handout and Statistical Reference Appendix for Week Twelve Assessment.pdf',
+        ext: 'pdf',
+      });
+
+      expect(path.length).toBeLessThanOrEqual(MAX_RELATIVE_DOWNLOAD_PATH_LENGTH);
+      const segments = path.split('/');
+      expect(segments).toHaveLength(6);
+      expect(segments[0]).toBe('UniPD');
+      expect(segments[1]).toBe('2026-2027');
+      expect(segments[2]).toMatch(/^PSQ4107809 - .+/);
+      expect(segments[3]).toMatch(/^12 - .+/);
+      expect(segments[4]).toBe('Materials');
+      expect(segments[5]).toMatch(/^07 - .+\.pdf$/);
+    });
   });
 });

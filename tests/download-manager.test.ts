@@ -816,4 +816,85 @@ describe('download-manager', () => {
     await manager2.handleDownloadDelta({ id: 1200, state: { current: 'complete' } });
     expect(manager2.getState().items[2]?.status).toBe('in_progress');
   });
+
+  it('preserves 85-99 char courseFolder parity, strips .. traversal, guards Windows stems, and caps resolvedFilename <= 180 chars [ARCH-006-01]', async () => {
+    const chromeMock = createInMemoryChromeDownloads(1300);
+
+    const courseFolder85 = `PSQ4107809 - ${'A'.repeat(72)}`;
+    const courseFolder99 = `PSQ410780901234567890123 - ${'B'.repeat(72)}`;
+    expect(courseFolder85.length).toBe(85);
+    expect(courseFolder99.length).toBe(99);
+
+    const resolvedTargets: Record<number, string> = {
+      420001: `UniPD/2026-2027/${courseFolder85}/01 - Intro/Materials/01 - Syllabus.pdf`,
+      420002: `UniPD/2026-2027/${courseFolder99}/01 - Intro/Materials/01 - Slides.pptx`,
+      420003: 'UniPD/2026-2027/../../Course/../01 - Intro/../Materials/../../evil.pdf',
+      420004: 'UniPD/2026-2027/CON/01 - Intro/Materials/NUL.1.pdf',
+      420005: `UniPD/2026-2027/${courseFolder99}/01 - Week One Assessment/Materials/01 - ${'LongTitle'.repeat(12)}.pptx`,
+    };
+
+    const manager = new DownloadManager({
+      api: chromeMock.api,
+      maxConcurrent: 5,
+      resolveDownloadUrl: async (descriptor) => {
+        if (descriptor.kind !== 'material') {
+          throw new Error('Expected material descriptor');
+        }
+        return {
+          url: `https://psico.elearning.unipd.it/pluginfile.php/1/mod_resource/content/0/${descriptor.material.cmid}.pdf`,
+          resolvedFilename: resolvedTargets[descriptor.material.cmid]!,
+        };
+      },
+    });
+
+    const makeMaterialReq = (cmid: number): EnqueueDownloadItem => ({
+      cmid,
+      courseId: 7075,
+      lectureTitle: `Item ${cmid}`,
+      filename: `UniPD/2026-2027/placeholder/${cmid}.bin`,
+      kind: 'material',
+      descriptor: {
+        kind: 'material',
+        material: {
+          cmid,
+          courseId: 7075,
+          sectionIndex: 1,
+          sectionTitle: 'Intro',
+          activityIndex: 1,
+          title: `Item ${cmid}`,
+          type: 'resource',
+          url: `https://psico.elearning.unipd.it/mod/resource/view.php?id=${cmid}`,
+          fileTypeHint: null,
+          detailsText: null,
+        },
+        filename: `UniPD/2026-2027/placeholder/${cmid}.bin`,
+      },
+    });
+
+    await manager.enqueue([
+      makeMaterialReq(420001),
+      makeMaterialReq(420002),
+      makeMaterialReq(420003),
+      makeMaterialReq(420004),
+      makeMaterialReq(420005),
+    ]);
+
+    const downloadedFilenames = chromeMock.downloadSpy.mock.calls.map((c) => c[0].filename);
+    // (a) 85-char and 99-char courseFolder parity preserved intact (not truncated to 80 chars)
+    expect(downloadedFilenames[0]).toBe(resolvedTargets[420001]);
+    expect(downloadedFilenames[1]).toBe(resolvedTargets[420002]);
+
+    // (b) '..' traversal segments stripped cleanly
+    expect(downloadedFilenames[2]).toBe('UniPD/2026-2027/Course/01 - Intro/Materials/evil.pdf');
+    expect(downloadedFilenames[2]).not.toContain('..');
+
+    // (c) Windows reserved stems guarded across directories and dotted filenames
+    expect(downloadedFilenames[3]).toBe('UniPD/2026-2027/CON_/01 - Intro/Materials/NUL_.1.pdf');
+
+    // (d) >180-char resolvedFilename truncated safely <= 180 while keeping courseFolder parity
+    const truncated = downloadedFilenames[4]!;
+    expect(truncated.length).toBeLessThanOrEqual(180);
+    expect(truncated.startsWith(`UniPD/2026-2027/${courseFolder99}/`)).toBe(true);
+    expect(truncated.endsWith('.pptx')).toBe(true);
+  });
 });

@@ -241,7 +241,7 @@ function sanitizeResolvedRelativePath(rawPath: string): string {
   }
 
   const last = parts.pop()!;
-  const cleanDirs = parts.map((dir) => sanitizePathSegment(dir, 80));
+  const cleanDirs = parts.map((dir) => sanitizePathSegment(dir, 105));
 
   const dotIdx = last.lastIndexOf('.');
   const rawStem = dotIdx > 0 ? last.slice(0, dotIdx) : last;

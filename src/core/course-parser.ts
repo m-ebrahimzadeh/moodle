@@ -110,6 +110,12 @@ function detectActivityType(
     }
   }
 
+  // If Moodle explicitly declares a different modtype_* class (e.g. modtype_subsection,
+  // modtype_forum, modtype_label), do not fall back to descendant /mod/ links.
+  if (classes.some((cls) => cls.startsWith('modtype_'))) {
+    return null;
+  }
+
   if (linkHref) {
     const hrefMatch = linkHref.match(/\/mod\/(kalvidres|videotime|resource|folder)\/view\.php/i);
     const matched = hrefMatch?.[1]?.toLowerCase();
@@ -126,11 +132,14 @@ function detectActivityType(
   return null;
 }
 
-function extractTrailingKnownExtension(input: string | null | undefined): string | null {
+function extractTrailingKnownExtension(
+  input: string | null | undefined,
+  stripUrlQueryAndHash: boolean = false,
+): string | null {
   if (!input) {
     return null;
   }
-  const clean = input.split(/[?#]/)[0]?.trim() ?? '';
+  const clean = (stripUrlQueryAndHash ? input.split(/[?#]/)[0] : input)?.trim() ?? '';
   const match = clean.match(/\.([a-zA-Z0-9]{1,8})\s*$/);
   const ext = match?.[1]?.toLowerCase();
   if (ext && KNOWN_MATERIAL_EXTENSIONS.has(ext)) {
@@ -150,12 +159,12 @@ function extractMaterialFileTypeHint(
     return 'folder';
   }
 
-  const titleExt = extractTrailingKnownExtension(title);
+  const titleExt = extractTrailingKnownExtension(title, false);
   if (titleExt) {
     return titleExt;
   }
 
-  const hrefExt = extractTrailingKnownExtension(linkHref);
+  const hrefExt = extractTrailingKnownExtension(linkHref, true);
   if (hrefExt) {
     return hrefExt;
   }
@@ -270,6 +279,21 @@ function extractSectionIndex(sectionEl: HTMLElement, fallbackIndex: number): num
   return fallbackIndex;
 }
 
+function isOwnedBySection(
+  el: HTMLElement,
+  sectionEl: HTMLElement,
+  sectionElementSet: ReadonlySet<HTMLElement>,
+): boolean {
+  let cursor = el.parentNode as HTMLElement | null;
+  while (cursor && cursor !== sectionEl) {
+    if (sectionElementSet.has(cursor)) {
+      return false;
+    }
+    cursor = cursor.parentNode as HTMLElement | null;
+  }
+  return cursor === sectionEl;
+}
+
 /**
  * Parses Moodle 4.5 course HTML strictly scoped to `#region-main` to prevent
  * duplicate captures from the left-hand `#course-index` navigation drawer.
@@ -290,6 +314,8 @@ export function parseCourseContentFromHtml(
   }
 
   const sectionElements = regionMain.querySelectorAll('li.section.course-section[data-sectionid]');
+  const sectionElementSet = new Set<HTMLElement>(sectionElements);
+  const seenCmids = new Set<number>();
   const sections: CourseSection[] = [];
   const materialSections: CourseMaterialSection[] = [];
 
@@ -301,16 +327,29 @@ export function parseCourseContentFromHtml(
 
     const sectionId = sectionEl.getAttribute('data-sectionid') ?? String(i);
     const sectionIndex = extractSectionIndex(sectionEl, i);
-    const sectionNameEl = sectionEl.querySelector('.sectionname');
+    const sectionNameEl =
+      sectionEl
+        .querySelectorAll('.sectionname')
+        .find((el) => isOwnedBySection(el, sectionEl, sectionElementSet)) ?? null;
     const sectionTitle = extractCleanText(sectionNameEl) || `Section ${sectionIndex}`;
 
     const activityElements = sectionEl.querySelectorAll('li.activity');
     const activities: LectureActivity[] = [];
     const materials: CourseMaterialActivity[] = [];
-    const seenCmids = new Set<number>();
 
     for (const activityEl of activityElements) {
-      const linkEl = activityEl.querySelector('a.aalink') ?? activityEl.querySelector('a[href*="/mod/"]');
+      if (!isOwnedBySection(activityEl, sectionEl, sectionElementSet)) {
+        continue;
+      }
+
+      const linkEl =
+        activityEl
+          .querySelectorAll('a.aalink')
+          .find((el) => isOwnedBySection(el, sectionEl, sectionElementSet)) ??
+        activityEl
+          .querySelectorAll('a[href*="/mod/"]')
+          .find((el) => isOwnedBySection(el, sectionEl, sectionElementSet)) ??
+        null;
       const rawHref = linkEl?.getAttribute('href') ?? null;
 
       const type = detectActivityType(activityEl, rawHref);
@@ -323,7 +362,10 @@ export function parseCourseContentFromHtml(
         continue;
       }
 
-      const instanceNameEl = activityEl.querySelector('.instancename');
+      const instanceNameEl =
+        activityEl
+          .querySelectorAll('.instancename')
+          .find((el) => isOwnedBySection(el, sectionEl, sectionElementSet)) ?? null;
       const fallbackLabel = type === 'folder' ? `Folder ${cmid}` : `Lecture ${cmid}`;
       const title =
         extractCleanText(instanceNameEl) ||
@@ -488,12 +530,12 @@ function safeDecodeURIComponent(value: string): string {
 }
 
 function extractFilenameExtension(filename: string): string {
-  const clean = filename.split(/[?#]/)[0]?.trim() ?? '';
+  const clean = filename.trim();
   const dotIdx = clean.lastIndexOf('.');
   if (dotIdx > 0 && dotIdx < clean.length - 1) {
-    const ext = clean.slice(dotIdx + 1).replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
-    if (ext) {
-      return ext;
+    const rawExt = clean.slice(dotIdx + 1).trim();
+    if (/^[a-zA-Z0-9]{1,12}$/.test(rawExt)) {
+      return rawExt.toLowerCase();
     }
   }
   return 'bin';

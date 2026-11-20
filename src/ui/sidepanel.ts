@@ -61,6 +61,8 @@ interface MaterialRowDomRefs {
   metaEl: HTMLDivElement;
   expandBtn: HTMLButtonElement | null;
   filesContainerEl: HTMLDivElement | null;
+  folderFileCheckboxes: Map<number, HTMLInputElement>;
+  renderedFolderFilesSignature: string | null;
 }
 
 interface QueueCardDomRefs {
@@ -764,14 +766,20 @@ function updateMaterialRow(cmid: number): void {
   metaNodes.push(folderBadge);
 
   if (entry.folderLoading) {
+    refs.checkbox.removeAttribute('aria-describedby');
+    refs.expandBtn?.removeAttribute('aria-describedby');
     const loading = document.createElement('span');
     loading.textContent = 'Loading files…';
     metaNodes.push(loading);
   } else if (entry.folderError) {
+    const errId = `folder-err-${material.cmid}`;
     const errSpan = document.createElement('span');
+    errSpan.id = errId;
     errSpan.className = 'badge badge-err';
     errSpan.textContent = entry.folderError;
     metaNodes.push(errSpan);
+    refs.checkbox.setAttribute('aria-describedby', errId);
+    refs.expandBtn?.setAttribute('aria-describedby', errId);
 
     const retryBtn = document.createElement('button');
     retryBtn.type = 'button';
@@ -783,10 +791,14 @@ function updateMaterialRow(cmid: number): void {
       void loadFolderFiles(entry, state.scanGeneration, { selectAllOnLoad: entry.selected });
     });
     metaNodes.push(retryBtn);
-  } else if (material.detailsText) {
-    const details = document.createElement('span');
-    details.textContent = material.detailsText;
-    metaNodes.push(details);
+  } else {
+    refs.checkbox.removeAttribute('aria-describedby');
+    refs.expandBtn?.removeAttribute('aria-describedby');
+    if (material.detailsText) {
+      const details = document.createElement('span');
+      details.textContent = material.detailsText;
+      metaNodes.push(details);
+    }
   }
   refs.metaEl.replaceChildren(...metaNodes);
 
@@ -806,60 +818,89 @@ function updateMaterialRow(cmid: number): void {
   }
 
   if (refs.filesContainerEl) {
-    if (!entry.folderExpanded || !entry.folderLoaded) {
+    if (!entry.folderLoaded) {
       refs.filesContainerEl.hidden = true;
-      refs.filesContainerEl.replaceChildren();
+      if (refs.renderedFolderFilesSignature !== null) {
+        refs.filesContainerEl.replaceChildren();
+        refs.folderFileCheckboxes.clear();
+        refs.renderedFolderFilesSignature = null;
+      }
+    } else if (!entry.folderExpanded) {
+      refs.filesContainerEl.hidden = true;
     } else {
       refs.filesContainerEl.hidden = false;
       if (entry.folderFiles.length === 0) {
-        const empty = document.createElement('p');
-        empty.className = 'muted-caption';
-        empty.textContent = 'No downloadable files found in this folder.';
-        refs.filesContainerEl.replaceChildren(empty);
+        if (refs.renderedFolderFilesSignature !== '__EMPTY__') {
+          const empty = document.createElement('p');
+          empty.className = 'muted-caption';
+          empty.textContent = 'No downloadable files found in this folder.';
+          refs.filesContainerEl.replaceChildren(empty);
+          refs.folderFileCheckboxes.clear();
+          refs.renderedFolderFilesSignature = '__EMPTY__';
+        }
       } else {
-        const fileList = document.createElement('ul');
-        fileList.className = 'material-folder-files';
+        const signature = entry.folderFiles
+          .map(
+            (f) =>
+              `${f.file.fileIndex}\0${f.file.name}\0${f.file.ext}\0${f.file.subPath.join('/')}`,
+          )
+          .join('\n');
 
-        for (const fileEntry of entry.folderFiles) {
-          const itemLi = document.createElement('li');
-          itemLi.className = 'material-folder-file-row';
+        if (refs.renderedFolderFilesSignature !== signature) {
+          const fileList = document.createElement('ul');
+          fileList.className = 'material-folder-files';
+          refs.folderFileCheckboxes.clear();
 
-          const chk = document.createElement('input');
-          chk.type = 'checkbox';
-          chk.id = `folder-file-chk-${material.cmid}-${fileEntry.file.fileIndex}`;
-          chk.checked = fileEntry.selected;
-          chk.addEventListener('change', () => {
-            fileEntry.selected = chk.checked;
-            updateMaterialRow(material.cmid);
-            updateSelectionSummary();
-          });
+          for (const fileEntry of entry.folderFiles) {
+            const itemLi = document.createElement('li');
+            itemLi.className = 'material-folder-file-row';
 
-          const fileInfo = document.createElement('div');
-          fileInfo.className = 'material-folder-file-info';
+            const chk = document.createElement('input');
+            chk.type = 'checkbox';
+            chk.id = `folder-file-chk-${material.cmid}-${fileEntry.file.fileIndex}`;
+            chk.checked = fileEntry.selected;
+            chk.addEventListener('change', () => {
+              fileEntry.selected = chk.checked;
+              updateMaterialRow(material.cmid);
+              updateSelectionSummary();
+            });
+            refs.folderFileCheckboxes.set(fileEntry.file.fileIndex, chk);
 
-          const label = document.createElement('label');
-          label.className = 'material-folder-file-name';
-          label.htmlFor = chk.id;
-          label.textContent = fileEntry.file.name;
-          fileInfo.appendChild(label);
+            const fileInfo = document.createElement('div');
+            fileInfo.className = 'material-folder-file-info';
 
-          if (fileEntry.file.subPath.length > 0) {
-            const subSpan = document.createElement('span');
-            subSpan.className = 'material-subpath';
-            subSpan.textContent = fileEntry.file.subPath.join(' / ');
-            fileInfo.appendChild(subSpan);
+            const label = document.createElement('label');
+            label.className = 'material-folder-file-name';
+            label.htmlFor = chk.id;
+            label.textContent = fileEntry.file.name;
+            fileInfo.appendChild(label);
+
+            if (fileEntry.file.subPath.length > 0) {
+              const subSpan = document.createElement('span');
+              subSpan.className = 'material-subpath';
+              subSpan.textContent = fileEntry.file.subPath.join(' / ');
+              fileInfo.appendChild(subSpan);
+            }
+
+            const extBadge = document.createElement('span');
+            extBadge.className = 'badge';
+            extBadge.textContent = `.${fileEntry.file.ext}`;
+            fileInfo.appendChild(extBadge);
+
+            itemLi.append(chk, fileInfo);
+            fileList.appendChild(itemLi);
           }
 
-          const extBadge = document.createElement('span');
-          extBadge.className = 'badge';
-          extBadge.textContent = `.${fileEntry.file.ext}`;
-          fileInfo.appendChild(extBadge);
-
-          itemLi.append(chk, fileInfo);
-          fileList.appendChild(itemLi);
+          refs.filesContainerEl.replaceChildren(fileList);
+          refs.renderedFolderFilesSignature = signature;
+        } else {
+          for (const fileEntry of entry.folderFiles) {
+            const chk = refs.folderFileCheckboxes.get(fileEntry.file.fileIndex);
+            if (chk && chk.checked !== fileEntry.selected) {
+              chk.checked = fileEntry.selected;
+            }
+          }
         }
-
-        refs.filesContainerEl.replaceChildren(fileList);
       }
     }
   }
@@ -964,9 +1005,11 @@ function renderMaterialsStructure(): void {
       let filesContainerEl: HTMLDivElement | null = null;
 
       if (material.type === 'folder') {
+        const filesContainerId = `folder-files-${material.cmid}`;
         expandBtn = document.createElement('button');
         expandBtn.type = 'button';
         expandBtn.className = 'btn btn-ghost btn-sm';
+        expandBtn.setAttribute('aria-controls', filesContainerId);
         expandBtn.addEventListener('click', () => {
           if (!entry.folderLoaded && !entry.folderLoading) {
             entry.folderExpanded = true;
@@ -981,6 +1024,7 @@ function renderMaterialsStructure(): void {
         mainRow.appendChild(expandBtn);
 
         filesContainerEl = document.createElement('div');
+        filesContainerEl.id = filesContainerId;
         filesContainerEl.hidden = true;
       }
 
@@ -996,6 +1040,8 @@ function renderMaterialsStructure(): void {
         metaEl,
         expandBtn,
         filesContainerEl,
+        folderFileCheckboxes: new Map(),
+        renderedFolderFilesSignature: null,
       });
       updateMaterialRow(material.cmid);
     }
@@ -1321,7 +1367,8 @@ function loadFolderFiles(
     return existing;
   }
 
-  const promise = (async () => {
+  let promise: Promise<void> | undefined;
+  promise = (async () => {
     entry.folderLoading = true;
     entry.folderError = null;
     updateMaterialRow(entry.material.cmid);
@@ -1335,7 +1382,7 @@ function loadFolderFiles(
       if (state.scanGeneration !== generation) {
         return;
       }
-      const selectAll = options.selectAllOnLoad || entry.selected;
+      const selectAll = entry.selected;
       entry.folderFiles = res.files.map((file) => ({
         file,
         selected: selectAll,
@@ -1353,7 +1400,9 @@ function loadFolderFiles(
       entry.selected = false;
       entry.folderError = err instanceof Error ? err.message : 'Failed to load folder files';
     } finally {
-      state.inFlightFolderResolves.delete(entry.material.cmid);
+      if (promise && state.inFlightFolderResolves.get(entry.material.cmid) === promise) {
+        state.inFlightFolderResolves.delete(entry.material.cmid);
+      }
     }
 
     if (state.scanGeneration === generation) {
