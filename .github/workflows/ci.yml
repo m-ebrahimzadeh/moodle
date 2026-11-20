@@ -1,0 +1,102 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: TypeScript typecheck
+        run: npm run typecheck
+
+      - name: Run unit tests
+        run: npm test
+
+      - name: Build production MV3 bundle
+        run: npm run build
+
+      - name: Verify static dist/ & UI safety invariants
+        run: |
+          node -e '
+          const fs = require("node:fs");
+          const path = require("node:path");
+
+          const htmlPath = path.join("dist", "src", "ui", "sidepanel.html");
+          const html = fs.readFileSync(htmlPath, "utf8");
+          if (/modulepreload/i.test(html)) {
+            throw new Error("Unexpected modulepreload found in dist/src/ui/sidepanel.html");
+          }
+
+          const assetsDir = path.join("dist", "assets");
+          const assetFiles = fs.readdirSync(assetsDir);
+          const cssFiles = assetFiles.filter((f) => f.endsWith(".css"));
+          if (cssFiles.length === 0) {
+            throw new Error("No built CSS asset found in dist/assets");
+          }
+          const combinedCss = cssFiles
+            .map((f) => fs.readFileSync(path.join(assetsDir, f), "utf8"))
+            .join("\n");
+          if (!/\[hidden\]\s*\{\s*display\s*:\s*none\s*!important\s*;?\s*\}/i.test(combinedCss)) {
+            throw new Error("[hidden]{display:none!important} rule missing in built CSS");
+          }
+
+          const uiJsFiles = assetFiles.filter((f) => f.endsWith(".js"));
+          for (const f of uiJsFiles) {
+            const content = fs.readFileSync(path.join(assetsDir, f), "utf8");
+            if (/innerHTML/i.test(content)) {
+              throw new Error(`Forbidden innerHTML found in built asset: ${f}`);
+            }
+          }
+
+          for (const srcFile of fs.readdirSync(path.join("src", "ui"))) {
+            const fullPath = path.join("src", "ui", srcFile);
+            if (fs.statSync(fullPath).isFile()) {
+              const content = fs.readFileSync(fullPath, "utf8");
+              if (/innerHTML/i.test(content)) {
+                throw new Error(`Forbidden innerHTML found in source UI file: ${fullPath}`);
+              }
+            }
+          }
+
+          const manifest = JSON.parse(fs.readFileSync(path.join("dist", "manifest.json"), "utf8"));
+          if (manifest.manifest_version !== 3) {
+            throw new Error(`Expected manifest_version 3, got ${manifest.manifest_version}`);
+          }
+          console.log(`Static dist/ checks passed (${cssFiles.length} CSS, ${uiJsFiles.length} asset JS, MV3 valid).`);
+          '
+
+      - name: Verify UESF snapshot cleanliness & zero drift
+        run: |
+          node .uesf/bin/uesf.mjs sync-snapshot
+          node -e '
+          const fs = require("node:fs");
+          const snap = fs.readFileSync(".uesf/CONTEXT_SNAPSHOT.md", "utf8");
+          if (!/Drift Audit Verdict\*\*:\s*`CLEAN/.test(snap)) {
+            throw new Error("CONTEXT_SNAPSHOT.md does not report Drift Audit Verdict: CLEAN");
+          }
+          console.log("UESF Drift Audit Verdict: CLEAN");
+          '
+          git diff --exit-code .uesf/CONTEXT_SNAPSHOT.md

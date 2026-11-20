@@ -2,35 +2,35 @@
 > **NON-AUTHORITATIVE DERIVED ARTIFACT — DO NOT EDIT MANUALLY**
 > Generated deterministically by `bin/uesf.mjs sync-snapshot` per `policies/SOURCE_OF_TRUTH_POLICY.md` (`DEC-023`, `DEC-026`).
 > * **Canonical Control Plane**: `.uesf/`
-> * **Snapshot Version**: `0.1.0`
-> * **Source-Ledger-SHA256**: `177d477a351bfb1c9354a1986840178ce75a4ad253654c1648c7affc6d14c356` (`177d477a351b`)
-> * **Last Ledger Update**: `2026-11-19`
+> * **Snapshot Version**: `0.1.1`
+> * **Source-Ledger-SHA256**: `7335bdd19fb40c6b19f9b5725c69927b368fae601ce424e2eac467bef74e4af5` (`7335bdd19fb4`)
+> * **Last Ledger Update**: `2026-11-20`
 
 ## 1. Empirically Verified Repository Facts (`[VERIFIED_BY_GIT_AND_FS_PROBE]`)
-* **Canonical Specification Files on Disk**: `9`
-* **Registered Documents in `KNOWLEDGE_MAP.md`**: `9`
+* **Canonical Specification Files on Disk**: `10`
+* **Registered Documents in `KNOWLEDGE_MAP.md`**: `10`
 * **Missing Registered Files on Disk**: `0`
 * **Unindexed Canonical Markdown Files on Disk**: `0`
 * **Header-to-Registry Version Mismatches**: `0`
-* **Total Recorded Tasks (`ACCEPTED` / Total)**: `4 / 4`
-* **Total Recorded Decisions (`DEC-*`)**: `4`
-* **Unresolved Open Questions (`OQ-*`)**: `1`
+* **Total Recorded Tasks (`ACCEPTED` / Total)**: `4 / 5`
+* **Total Recorded Decisions (`DEC-*`)**: `5`
+* **Unresolved Open Questions (`OQ-*`)**: `0`
 
 ## 2. Recorded Project & Governance State (`[RECORDED_IN_LEDGER]`)
 ### 2.1 Project Identity & Architecture Profile (`.uesf/EXTENSION.md`)
 # Project-Specific Extension — moodle
 * **Document ID**: MOODLE-CTRL-001
 * **Canonical Path**: .uesf/EXTENSION.md
-* **Version**: 0.1.0
+* **Version**: 0.1.1
 * **Status**: Verified
 * **Owner**: Architect
 * **Pinned UESF Version**: 0.9.0
-* **Last Updated**: 2026-11-19
+* **Last Updated**: 2026-11-20
 
 ## 1. Purpose & Target Project Profile
 Define the Layer 6 Project-Specific Extension and operational control profile for the `moodle` project (`templates/PROJECT_EXTENSION_TEMPLATE.md`, UESF `v0.9.0`).
 * **Project Name**: `moodle`
-* **Canonical Remote Repository**: None configured yet (`OQ-001`) — Default Branch: `main` (unborn branch; no commits yet)
+* **Canonical Remote Repository**: `https://github.com/m-ebrahimzadeh/moodle.git` — Default Branch: `main`
 * **Detected Tech Stack**: TypeScript 5 (`strict: true`), Chrome Extension Manifest V3 (`chrome.sidePanel`, `chrome.downloads`, Background Service Worker), Vite, Vitest (`DEC-003`)
 * **Operational Control Plane**: `.uesf/{EXTENSION.md, KNOWLEDGE_MAP.md, ACTIVE_TASKS.md, DECISION_LOG.md, CONTEXT_SNAPSHOT.md}` plus gitignored `.uesf/handoffs/`
 * **Permanent Documentation Home**: Native project root `README.md` and `docs/{investigation,architecture}/*.md` (indexed 1-to-1 in `.uesf/KNOWLEDGE_MAP.md`)
@@ -102,15 +102,16 @@ Covers all project work executed under UESF `Fast-Path` and `Standard-Contract` 
 | `TASK-002` | Conduct Live UniPD Moodle Investigation & Establish Project Knowledge Base (`psico.elearning.unipd.it`) | Architect | CTO / Human Stakeholder | Local Repository (`moodle`) | `A1` | `ACCEPTED` | `EV-TASK-002-01` (`HO-TASK-002-02`): Accepted by CTO & Human Stakeholder (`2026-11-19`); findings verified across 5 stages and architecture ratified in `DEC-003` (`OQ-002` closed). |
 | `TASK-003` | Implement UniPD Moodle MV3 Chrome Extension MVP (`v0.1.0` — Core Clients, Side Panel UI & Download Queue) | Developer | QA / Architect | Local Repository (`moodle`) | `A1` | `ACCEPTED` | Accepted by Human Stakeholder (`2026-11-20`) following independent QA (`d9362fca`, `PASS_WITH_MINOR_NOTES`), Architect (`71deef6e`, `CONFORMANT_WITH_MINOR_NOTES`), unauthenticated Live Chrome 158 (`e5c28278`, `PASS`: `LIVE-001` & `LIVE-002`), micro-hardening pass (`d31fb17`, `59/59` tests, all 8 review-board notes resolved), and full Live Authenticated Chrome 158 E2E (`f4451964` + `d50f47b3`, `PASS`: Shibboleth SSO auto-push, 24 courses, Kaltura resolution, zero-secret boundary, real `368.6 MB` `.mp4` + `.vtt` downloads under `UniPD/...`, live cancel, and `LIVE-UI-001` / `LIVE-UI-002` CSS/UI fixes verified with `0` errors). |
 | `TASK-004` | Adjudicate `KDP-001` & Patch `.uesf/bin/uesf.mjs` `walkMdFiles()` Dependency/Build Exclusions (`Fast-Path`) | DevOps | QA / CTO | Local Repository (`moodle`) | `A2` | `ACCEPTED` | `DEC-004` (`2026-11-20`): patched `.uesf/bin/uesf.mjs` `walkMdFiles()` (`ALWAYS_SKIP_DIRS` + `BUILD_ARTIFACT_DIRS`); independently verified (`PASS`) by isolated QA session (`922a963e-c85c-4bf8-ac34-6b72ce805625`) — two consecutive `sync-snapshot` runs exited `0` with identical SHA256 (`IDEMPOTENT=True`) and `Drift Audit Verdict: CLEAN (0 discrepancies)`. |
+| `TASK-005` | Configure GitHub Actions CI Pipeline & Commit `OQ-001`/`DEC-005` Governance Baseline (`Fast-Path`) | DevOps | QA | Local Repository (`moodle`) | `A2` | `IN_REVIEW` | Implemented `.github/workflows/ci.yml` (`contents: read`, `checkout@v4`, `setup-node@v4` Node `22`, `npm ci`, `typecheck`, `test`, `build`, static `dist/` checks, `sync-snapshot` `CLEAN` + `git diff --exit-code`), bundled with `OQ-001`/`DEC-005` (`MOODLE-CTRL-001` `v0.1.1`, `MOODLE-CTRL-004` `v0.1.3`, `MOODLE-CTRL-002`, `MOODLE-DOC-006`) on `main` -> `.uesf/handoffs/HO-TASK-005-02.md`. |
 
 ## 5. Active Outbound Task Queue
-* *(None — `TASK-001` through `TASK-004` are `ACCEPTED`. Next candidates: configure canonical Git remote `OQ-001` or plan Phase 2 `v0.2.0` features.)*
+* `TASK-005` (`IN_REVIEW` -> `.uesf/handoffs/HO-TASK-005-02.md`): Submitted to independent `QA` (`Tier 1`) verification before landing `TASK-006` (`ARCH-006-02`).
 
 ### 2.3 Architectural & Governance Decisions (`.uesf/DECISION_LOG.md`)
 # Architectural & Governance Decision Log
 * **Document ID**: MOODLE-CTRL-004
 * **Canonical Path**: .uesf/DECISION_LOG.md
-* **Version**: 0.1.1
+* **Version**: 0.1.3
 * **Status**: Verified
 * **Owner**: CTO
 * **Last Updated**: 2026-11-20
@@ -128,11 +129,12 @@ Governs all technical architecture, governance, and tooling decisions recorded w
 | `DEC-002` | Project Charter & Architectural Constraints | Independent UniPD Moodle Lecture Extension Project: (1) build a Chrome Extension (MV3) conceptually similar to PoliRecord; (2) perform discovery, stream capture, and download orchestration inside the user's browser extension session (no backend bot/server); (3) maintain strict independence from `polisdk` in this dedicated repository, starting investigation from `https://psico.elearning.unipd.it/login/index.php`. | Confirmed | Human Stakeholder | 2026-11-19 |
 | `DEC-003` | MV3 Architecture, Tech Stack & MVP Scope (`OQ-002`) | Adopt Option A (Single-Package Pure MV3 Chrome Extension): flat modular layout (`src/{core,extension,ui}`, `tests/`), Chrome Side Panel (`chrome.sidePanel`) in Vanilla TypeScript + semantic HTML/CSS, headless `fetch()` pipeline (`/my/courses.php` `sesskey` -> Moodle AJAX `core_course_get_enrolled_courses_by_timeline_classification` -> `/course/view.php` `#region-main` parser -> `/mod/kalvidres/player_bridge.php` -> Kaltura `multirequest` -> direct progressive MP4 `format/url` + `.vtt` subtitles + Moodle `pluginfile.php` MP4s) downloaded via a bounded `chrome.downloads.download()` queue (max 2 concurrent); verified with TypeScript (`tsc --noEmit`), Vite (`npm run build`), and Vitest (`npm test`). Phase 1 MVP (`v0.1.0`) targets video lectures + `.vtt` subtitles; static PDFs/slides (`mod_resource`, `mod_folder`), Media Gallery LTI fallback, and Offscreen HLS fallback are deferred to Phase 2 (`v0.2.0`). | Confirmed | Human Stakeholder / CTO (`A2`) | 2026-11-19 |
 | `DEC-004` | Snapshot Tooling Patch (`KDP-001`) | Approve `KDP-001` (`PATCH`): update local vendored `.uesf/bin/uesf.mjs` `walkMdFiles()` to unconditionally skip `.git`, `handoffs`, and `node_modules` (`ALWAYS_SKIP_DIRS`), and skip build/cache artifact directories (`dist`, `.vite`, `coverage`, `build`, `.venv`, `venv`, `target`) during `sync-snapshot` (`excludeDistAndSnap = true`) so third-party package Markdown files never trigger false-positive `UNINDEXED_MD_ON_DISK` drift alerts. Zero-dependency static denylist preserved; upstream backport to UESF `v0.9.1` (`C:/Users/user/Project/uesf`) tracked separately outside `moodle` workspace scope. | Approved | CTO (`A2`) / DevOps | 2026-11-20 |
+| `DEC-005` | Phase 2 (`v0.2.0`) Roadmap, Materials Path & Permission Boundaries | Ratify incremental Phase 2 (`v0.2.0`) plan documented in `docs/architecture/02-phase2-v0.2.0-blueprint.md`: (1) `TASK-005` GitHub Actions CI + `OQ-001`/`DEC-005` governance commit (`Fast-Path`); (2) `TASK-006` Phase 2A Static Course Materials (`mod_resource` PDFs/slides/datasets + `mod_folder` packs, zero new manifest permissions, lazy resolution to prevent request storms on 50+ item courses, Option A subfolder layout `UniPD/{AY}/{Course}/{Section}/Materials/...`); (3) `TASK-007` Phase 2B UX, Persistence & Queue Polish (persistent `chrome.storage.local` prefs, secret-free download history badge, 1-click Retry via persisted descriptors, HLS-only diagnostic detection); (4) `TASK-008` Phase 2C `local_kalturamediagallery` (`media19.elearning.unipd.it`) starting with an `A0` live investigation spike before any `optional_host_permissions` (`A3`) addition. Defer Offscreen HLS remuxing (`chrome.offscreen`) to `v0.3.0+` unless HLS-only telemetry is actually observed on UniPD. | Confirmed | Human Stakeholder / CTO (`A2`) | 2026-11-20 |
 
 ## 4. Open Questions & Pending Human Decisions (`A3` / Clarification Items)
 | Question ID | Topic | Resolution Summary | Status |
 | :--- | :--- | :--- | :--- |
-| `OQ-001` | Canonical Remote Git Repository URL | Pending remote repository creation and `git remote add origin <url>` configuration; update `.uesf/EXTENSION.md` once set. | **Open (Pending Setup)** |
+| `OQ-001` | Canonical Remote Git Repository URL | Resolved (`2026-11-20`): configured `origin` -> `https://github.com/m-ebrahimzadeh/moodle.git` tracking `origin/main` (verified via `git remote -v`); `.uesf/EXTENSION.md` updated to `v0.1.1`. | **Closed (Configured on GitHub)** |
 | `OQ-002` | Target Tech Stack & Verification Gates | Resolved via `DEC-003`: Single-package TypeScript + Vite + Vitest MV3 Side Panel Chrome Extension (`src/{core,extension,ui}`) using headless `player_bridge.php` -> Kaltura progressive `format/url` MP4 + `chrome.downloads.download()`, verified via `npm run typecheck`, `npm test`, and `npm run build`. | **Closed (Resolved via DEC-003)** |
 
 ## 5. Responsibilities
@@ -165,16 +167,17 @@ Covers all tracked Markdown documents in the `moodle` repository (`README.md`, `
 ## 4. Document Registry
 | Doc ID | Canonical Repository Path | Layer / Category | Owner Role | Version | Lifecycle Status |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| `MOODLE-CTRL-001` | `.uesf/EXTENSION.md` | Layer 6: Project Extension | Architect | `0.1.0` | Verified |
+| `MOODLE-CTRL-001` | `.uesf/EXTENSION.md` | Layer 6: Project Extension | Architect | `0.1.1` | Verified |
 | `MOODLE-CTRL-002` | `.uesf/KNOWLEDGE_MAP.md` | Operational State Index | CTO | `0.1.0` | Verified |
 | `MOODLE-CTRL-003` | `.uesf/ACTIVE_TASKS.md` | Operational Task Ledger | CTO | `0.1.0` | Verified |
-| `MOODLE-CTRL-004` | `.uesf/DECISION_LOG.md` | Operational Decision Log | CTO | `0.1.1` | Verified |
+| `MOODLE-CTRL-004` | `.uesf/DECISION_LOG.md` | Operational Decision Log | CTO | `0.1.3` | Verified |
 | `MOODLE-DOC-001` | `README.md` | Domain 2: Project Overview | Architect | `0.1.0` | Verified |
 | `MOODLE-DOC-002` | `docs/investigation/01-auth-and-session-flow.md` | Domain 2: Investigation Spec | Architect | `0.1.0` | Verified |
 | `MOODLE-DOC-003` | `docs/investigation/02-course-and-lecture-discovery.md` | Domain 2: Investigation Spec | Architect | `0.1.0` | Verified |
 | `MOODLE-DOC-004` | `docs/investigation/03-video-playback-and-download-mechanics.md` | Domain 2: Investigation Spec | Architect | `0.1.0` | Verified |
 | `MOODLE-DOC-005` | `docs/architecture/01-discovery-synthesis-and-options.md` | Domain 2: Architecture & OQ-002 | Architect | `0.1.0` | Verified |
+| `MOODLE-DOC-006` | `docs/architecture/02-phase2-v0.2.0-blueprint.md` | Domain 2: Phase 2 (`v0.2.0`) Blueprint | Architect | `0.1.0` | Approved |
 
 ## 3. Automated Discrepancy & Drift Audit (`[DRIFT_CHECK]`)
 * **Drift Audit Verdict**: `CLEAN (0 discrepancies between canonical ledgers and on-disk specification tree)`
-* **Cloud / Remote Session Note**: When reading this file remotely without local `CAP-FS`/`CAP-GIT`, treat Section 1 as verified at the time of the commit that produced `Source-Ledger-SHA256: 177d477a351b`, treat Section 2 as `[REPORTED — Remote Ledger]`, and treat any uncommitted local working-tree edits as `[UNKNOWN — Local FS Unavailable]`.
+* **Cloud / Remote Session Note**: When reading this file remotely without local `CAP-FS`/`CAP-GIT`, treat Section 1 as verified at the time of the commit that produced `Source-Ledger-SHA256: 7335bdd19fb4`, treat Section 2 as `[REPORTED — Remote Ledger]`, and treat any uncommitted local working-tree edits as `[UNKNOWN — Local FS Unavailable]`.

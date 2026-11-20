@@ -1,16 +1,16 @@
 # Project-Specific Extension — moodle
 * **Document ID**: MOODLE-CTRL-001
 * **Canonical Path**: .uesf/EXTENSION.md
-* **Version**: 0.1.0
+* **Version**: 0.1.1
 * **Status**: Verified
 * **Owner**: Architect
 * **Pinned UESF Version**: 0.9.0
-* **Last Updated**: 2026-11-19
+* **Last Updated**: 2026-11-20
 
 ## 1. Purpose & Target Project Profile
 Define the Layer 6 Project-Specific Extension and operational control profile for the `moodle` project (`templates/PROJECT_EXTENSION_TEMPLATE.md`, UESF `v0.9.0`).
 * **Project Name**: `moodle`
-* **Canonical Remote Repository**: None configured yet (`OQ-001`) — Default Branch: `main` (unborn branch; no commits yet)
+* **Canonical Remote Repository**: `https://github.com/m-ebrahimzadeh/moodle.git` — Default Branch: `main`
 * **Detected Tech Stack**: TypeScript 5 (`strict: true`), Chrome Extension Manifest V3 (`chrome.sidePanel`, `chrome.downloads`, Background Service Worker), Vite, Vitest (`DEC-003`)
 * **Operational Control Plane**: `.uesf/{EXTENSION.md, KNOWLEDGE_MAP.md, ACTIVE_TASKS.md, DECISION_LOG.md, CONTEXT_SNAPSHOT.md}` plus gitignored `.uesf/handoffs/`
 * **Permanent Documentation Home**: Native project root `README.md` and `docs/{investigation,architecture}/*.md` (indexed 1-to-1 in `.uesf/KNOWLEDGE_MAP.md`)
