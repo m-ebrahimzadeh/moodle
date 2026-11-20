@@ -193,5 +193,49 @@ describe('path-builder', () => {
       expect(segments[4]).toMatch(/^12 - .+/);
       expect(segments[5]).toMatch(/^07 - .+\.pdf$/);
     });
+
+    it('keeps the exact same {CourseFolder} and {SectionFolder} across lectures and long materials in one course', () => {
+      const lecturePath = buildLectureDownloadPath({
+        academicYear: '2026-2027',
+        courseCode: 'PSQ4107821',
+        courseTitle: 'INTERPRETATION AND EVALUATION OF PSYCHOLOGICAL RESEARCH',
+        lectureIndex: 1,
+        lectureDate: '2026-09-30',
+        lectureTitle: 'VideoLecture 1',
+        resolutionLabel: '1080p',
+        ext: 'mp4',
+      });
+      const shortMaterialPath = buildMaterialDownloadPath({
+        academicYear: '2026-2027',
+        courseCode: 'PSQ4107821',
+        courseTitle: 'INTERPRETATION AND EVALUATION OF PSYCHOLOGICAL RESEARCH',
+        sectionIndex: 2,
+        sectionTitle: 'Start Here Course Structure and Online Activities',
+        activityIndex: 1,
+        materialTitle: 'Syllabus',
+        ext: 'pdf',
+      });
+      const longMaterialPath = buildMaterialDownloadPath({
+        academicYear: '2026-2027',
+        courseCode: 'PSQ4107821',
+        courseTitle: 'INTERPRETATION AND EVALUATION OF PSYCHOLOGICAL RESEARCH',
+        sectionIndex: 2,
+        sectionTitle: 'Start Here Course Structure and Online Activities',
+        activityIndex: 2,
+        materialTitle: 'Online Activities Schedule_AY_2026_27_Detailed_Document',
+        ext: 'pdf',
+      });
+
+      expect(lecturePath.length).toBeLessThanOrEqual(MAX_RELATIVE_DOWNLOAD_PATH_LENGTH);
+      expect(shortMaterialPath.length).toBeLessThanOrEqual(MAX_RELATIVE_DOWNLOAD_PATH_LENGTH);
+      expect(longMaterialPath.length).toBeLessThanOrEqual(MAX_RELATIVE_DOWNLOAD_PATH_LENGTH);
+
+      const expectedCourseFolder =
+        'PSQ4107821 - INTERPRETATION AND EVALUATION OF PSYCHOLOGICAL RESEARCH';
+      expect(lecturePath.split('/')[2]).toBe(expectedCourseFolder);
+      expect(shortMaterialPath.split('/')[2]).toBe(expectedCourseFolder);
+      expect(longMaterialPath.split('/')[2]).toBe(expectedCourseFolder);
+      expect(shortMaterialPath.split('/')[4]).toBe(longMaterialPath.split('/')[4]);
+    });
   });
 });

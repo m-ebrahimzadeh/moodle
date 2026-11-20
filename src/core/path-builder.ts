@@ -253,6 +253,16 @@ export function buildLectureDownloadPath(params: LectureDownloadPathParams): str
   };
 
   let path = assemble();
+  // Trim only the leaf lecture title first so all Lectures/ and Materials/ for a
+  // course keep the exact same `{CourseFolder}` directory unless extreme prefix lengths force it.
+  if (path.length > MAX_RELATIVE_DOWNLOAD_PATH_LENGTH) {
+    const excess = path.length - MAX_RELATIVE_DOWNLOAD_PATH_LENGTH;
+    cleanLectureTitle = trimSegmentToLength(
+      cleanLectureTitle,
+      Math.max(12, cleanLectureTitle.length - excess),
+    );
+    path = assemble();
+  }
   for (const minLen of [12, 1]) {
     if (path.length <= MAX_RELATIVE_DOWNLOAD_PATH_LENGTH) {
       break;
@@ -300,6 +310,34 @@ export function buildMaterialDownloadPath(params: MaterialDownloadPathParams): s
     };
 
     let path = assemble();
+    // Preserve shared `{CourseFolder}` and `{SectionFolder}` directories by trimming
+    // the leaf material title first, then section title, before ever touching course prefix.
+    if (path.length > MAX_RELATIVE_DOWNLOAD_PATH_LENGTH) {
+      const excess = path.length - MAX_RELATIVE_DOWNLOAD_PATH_LENGTH;
+      cleanTitle = trimSegmentToLength(cleanTitle, Math.max(16, cleanTitle.length - excess));
+      path = assemble();
+    }
+    if (path.length > MAX_RELATIVE_DOWNLOAD_PATH_LENGTH) {
+      const excess = path.length - MAX_RELATIVE_DOWNLOAD_PATH_LENGTH;
+      cleanSectionTitle = trimSegmentToLength(
+        cleanSectionTitle,
+        Math.max(16, cleanSectionTitle.length - excess),
+      );
+      path = assemble();
+    }
+    for (const minLen of [4, 1]) {
+      if (path.length <= MAX_RELATIVE_DOWNLOAD_PATH_LENGTH) {
+        break;
+      }
+      const [nextSectionTitle, nextTitle] = trimProportionally(
+        [cleanSectionTitle, cleanTitle],
+        path.length - MAX_RELATIVE_DOWNLOAD_PATH_LENGTH,
+        minLen,
+      );
+      cleanSectionTitle = nextSectionTitle!;
+      cleanTitle = nextTitle!;
+      path = assemble();
+    }
     for (const minLen of [12, 1]) {
       if (path.length <= MAX_RELATIVE_DOWNLOAD_PATH_LENGTH) {
         break;
@@ -345,23 +383,21 @@ export function buildMaterialDownloadPath(params: MaterialDownloadPathParams): s
   };
 
   let path = assembleFolder();
+  // Trim leaf file name first, then within-course folder segments, leaving `{CourseFolder}` stable.
   if (path.length > MAX_RELATIVE_DOWNLOAD_PATH_LENGTH) {
-    // Pass 1: trim courseTitle, sectionTitle, and folderName down to min 10
-    const [nextCourseTitle, nextSectionTitle, nextFolderName] = trimProportionally(
-      [prefix.cleanCourseTitle, cleanSectionTitle, cleanFolderName],
-      path.length - MAX_RELATIVE_DOWNLOAD_PATH_LENGTH,
-      10,
-    );
-    prefix.cleanCourseTitle = nextCourseTitle!;
-    cleanSectionTitle = nextSectionTitle!;
-    cleanFolderName = nextFolderName!;
+    const excess = path.length - MAX_RELATIVE_DOWNLOAD_PATH_LENGTH;
+    cleanFileName = trimSegmentToLength(cleanFileName, Math.max(16, cleanFileName.length - excess));
     path = assembleFolder();
   }
 
   if (path.length > MAX_RELATIVE_DOWNLOAD_PATH_LENGTH) {
-    const excess = path.length - MAX_RELATIVE_DOWNLOAD_PATH_LENGTH;
-    const maxFileLen = Math.max(10, cleanFileName.length - excess);
-    cleanFileName = trimSegmentToLength(cleanFileName, maxFileLen);
+    const [nextSectionTitle, nextFolderName] = trimProportionally(
+      [cleanSectionTitle, cleanFolderName],
+      path.length - MAX_RELATIVE_DOWNLOAD_PATH_LENGTH,
+      10,
+    );
+    cleanSectionTitle = nextSectionTitle!;
+    cleanFolderName = nextFolderName!;
     path = assembleFolder();
   }
 
@@ -384,20 +420,26 @@ export function buildMaterialDownloadPath(params: MaterialDownloadPathParams): s
   }
 
   if (path.length > MAX_RELATIVE_DOWNLOAD_PATH_LENGTH) {
-    const [nextCourseTitle, nextSectionTitle, nextFolderName] = trimProportionally(
-      [prefix.cleanCourseTitle, cleanSectionTitle, cleanFolderName],
+    const [nextSectionTitle, nextFolderName, nextFileName] = trimProportionally(
+      [cleanSectionTitle, cleanFolderName, cleanFileName],
       path.length - MAX_RELATIVE_DOWNLOAD_PATH_LENGTH,
       1,
     );
-    prefix.cleanCourseTitle = nextCourseTitle!;
     cleanSectionTitle = nextSectionTitle!;
     cleanFolderName = nextFolderName!;
+    cleanFileName = nextFileName!;
     path = assembleFolder();
   }
 
-  if (path.length > MAX_RELATIVE_DOWNLOAD_PATH_LENGTH) {
+  for (const minLen of [10, 1]) {
+    if (path.length <= MAX_RELATIVE_DOWNLOAD_PATH_LENGTH) {
+      break;
+    }
     const excess = path.length - MAX_RELATIVE_DOWNLOAD_PATH_LENGTH;
-    cleanFileName = trimSegmentToLength(cleanFileName, Math.max(1, cleanFileName.length - excess));
+    prefix.cleanCourseTitle = trimSegmentToLength(
+      prefix.cleanCourseTitle,
+      Math.max(minLen, prefix.cleanCourseTitle.length - excess),
+    );
     path = assembleFolder();
   }
 

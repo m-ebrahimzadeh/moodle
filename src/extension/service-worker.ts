@@ -1251,6 +1251,20 @@ function registerServiceWorkerListeners(): void {
     void configureSidePanelBehavior();
   });
 
+  chrome.downloads.onDeterminingFilename?.addListener((item, suggest) => {
+    if (item.byExtensionId !== chrome.runtime.id) {
+      suggest();
+      return;
+    }
+
+    const targetFilename = getDownloadManager().resolveDeterminingFilename(item);
+    if (targetFilename) {
+      suggest({ filename: targetFilename, conflictAction: 'uniquify' });
+      return;
+    }
+    suggest();
+  });
+
   chrome.downloads.onChanged.addListener((delta) => {
     void (async () => {
       try {
