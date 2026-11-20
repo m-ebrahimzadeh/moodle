@@ -364,10 +364,13 @@ input[type='checkbox']:focus-visible {
   gap: 6px;
   max-height: 210px;
   overflow-y: auto;
+  scrollbar-gutter: stable;
+  overscroll-behavior: contain;
   padding-right: 2px;
 }
 
 .course-card {
+  flex: 0 0 auto;
   width: 100%;
   text-align: left;
   padding: 8px 10px;
@@ -455,13 +458,16 @@ input[type='checkbox']:focus-visible {
   gap: 10px;
   max-height: 320px;
   overflow-y: auto;
+  scrollbar-gutter: stable;
+  overscroll-behavior: contain;
   padding-right: 2px;
 }
 
 .section-group {
+  flex: 0 0 auto;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  overflow: hidden;
+  overflow: clip;
 }
 
 .section-header {
@@ -559,9 +565,12 @@ input[type='checkbox']:focus-visible {
   gap: 8px;
   max-height: 240px;
   overflow-y: auto;
+  scrollbar-gutter: stable;
+  overscroll-behavior: contain;
 }
 
 .queue-item {
+  flex: 0 0 auto;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   padding: 8px 9px;

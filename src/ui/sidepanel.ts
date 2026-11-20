@@ -649,7 +649,8 @@ function updateQueueCard(refs: QueueCardDomRefs, item: DownloadQueueItem): void 
 
   const kindTag = item.kind === 'subtitle' ? '.vtt' : '.mp4';
   if (item.totalBytes > 0) {
-    refs.bytesTextEl.textContent = `${kindTag} · ${formatFileSize(item.bytesReceived)} / ${formatFileSize(item.totalBytes)}`;
+    const receivedLabel = item.bytesReceived > 0 ? formatFileSize(item.bytesReceived) : '0 B';
+    refs.bytesTextEl.textContent = `${kindTag} · ${receivedLabel} / ${formatFileSize(item.totalBytes)}`;
   } else if (item.bytesReceived > 0) {
     refs.bytesTextEl.textContent = `${kindTag} · ${formatFileSize(item.bytesReceived)}`;
   } else {
