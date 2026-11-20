@@ -1116,4 +1116,17 @@ describe('download-manager', () => {
     expect(onCompletedSpy).toHaveBeenCalledTimes(1);
     expect(manager.getState().items[0]?.status).toBe('completed');
   });
+
+  it('sanitizes Shibboleth passwords, SAML payloads, and JSESSIONID tokens in error strings [TASK-009]', () => {
+    const raw =
+      'POST https://shibidp.cca.unipd.it/idp?execution=e1s2 failed: j_password=TopSecret1&password=AnotherSecret&SAMLResponse=BASE64&RelayState=RELAY&__Host-JSESSIONID=VAL_JSESS_99';
+    const sanitized = sanitizeErrorMessage(raw);
+    expect(sanitized).not.toContain('TopSecret1');
+    expect(sanitized).not.toContain('AnotherSecret');
+    expect(sanitized).not.toContain('BASE64');
+    expect(sanitized).not.toContain('VAL_JSESS_99');
+    expect(sanitized).toContain('j_password=[REDACTED]');
+    expect(sanitized).toContain('SAMLResponse=[REDACTED]');
+    expect(sanitized).toContain('__Host-JSESSIONID=[REDACTED]');
+  });
 });

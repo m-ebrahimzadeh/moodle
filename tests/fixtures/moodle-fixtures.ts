@@ -307,3 +307,73 @@ export const REDACTED_FOLDER_PAGE_HTML = `<!doctype html>
   </section>
 </body>
 </html>`;
+
+export const REDACTED_SHIB_E1S1_INTERSTITIAL_HTML = `<!doctype html>
+<html>
+<head><title>Servizio di Accesso Web - Loading Session Information</title></head>
+<body>
+  <form name="form1" action="/idp/profile/SAML2/Redirect/SSO?execution=e1s1" method="post">
+    <input name="shib_idp_ls_exception.shib_idp_session_ss" type="hidden" />
+    <input name="shib_idp_ls_success.shib_idp_session_ss" type="hidden" value="false" />
+    <input name="shib_idp_ls_value.shib_idp_session_ss" type="hidden" />
+    <input name="shib_idp_ls_exception.shib_idp_persistent_ss" type="hidden" />
+    <input name="shib_idp_ls_success.shib_idp_persistent_ss" type="hidden" value="false" />
+    <input name="shib_idp_ls_value.shib_idp_persistent_ss" type="hidden" />
+    <input name="shib_idp_ls_supported" type="hidden" />
+    <input name="_eventId_proceed" type="hidden" />
+  </form>
+</body>
+</html>`;
+
+export const REDACTED_SHIB_E1S2_LOGIN_HTML = `<!doctype html>
+<html>
+<head><title>Servizio di Accesso Web - idp7-shib5</title></head>
+<body>
+  <form id="user-login-form" action="/idp/profile/SAML2/Redirect/SSO?execution=e1s2" method="post">
+    <input id="j_username" name="j_username" type="text" value="" />
+    <input id="j_username_js" name="j_username_js" type="text" value="" />
+    <input id="password" name="j_password" type="password" value="" />
+    <input type="radio" name="dominio" id="radio1" value="@unipd.it" checked="checked" />
+    <input type="radio" name="dominio" id="radio2" value="@studenti.unipd.it" />
+    <button type="submit" name="_eventId_proceed" id="Login">Accedi</button>
+  </form>
+</body>
+</html>`;
+
+export const REDACTED_SHIB_E1S2_INVALID_LOGIN_HTML = `<!doctype html>
+<html>
+<head><title>Servizio di Accesso Web - idp7-shib5</title></head>
+<body>
+  <div class="alert alert-danger">Credenziali non valide o utente non abilitato.</div>
+  <form id="user-login-form" action="/idp/profile/SAML2/Redirect/SSO?execution=e1s3" method="post">
+    <input id="j_username" name="j_username" type="text" value="" />
+    <input id="j_username_js" name="j_username_js" type="text" value="" />
+    <input id="password" name="j_password" type="password" value="" />
+    <input type="radio" name="dominio" id="radio1" value="@unipd.it" />
+    <input type="radio" name="dominio" id="radio2" value="@studenti.unipd.it" checked="checked" />
+    <button type="submit" name="_eventId_proceed" id="Login">Accedi</button>
+  </form>
+</body>
+</html>`;
+
+export const REDACTED_SHIB_SAML_POST_HTML = `<!doctype html>
+<html>
+<body>
+  <form action="https://psico.elearning.unipd.it/sp-shibboleth.sso/SAML2/POST" method="post">
+    <input type="hidden" name="RelayState" value="ss:mem:REDACTED_RELAY" />
+    <input type="hidden" name="SAMLResponse" value="REDACTED_BASE64_SAML_ASSERTION" />
+    <input type="submit" value="Continue" />
+  </form>
+</body>
+</html>`;
+
+export const REDACTED_SHIB_MFA_CHALLENGE_HTML = `<!doctype html>
+<html>
+<head><title>Servizio di Accesso Web - Verifica MFA</title></head>
+<body>
+  <form id="otp-challenge-form" action="/idp/profile/SAML2/Redirect/SSO?execution=e1s4" method="post">
+    <input type="text" name="tokencode" />
+    <button type="submit" name="_eventId_proceed">Verify</button>
+  </form>
+</body>
+</html>`;

@@ -25,6 +25,31 @@ interface MoodleAjaxSuccess {
 
 type MoodleAjaxResponseItem = MoodleAjaxError | MoodleAjaxSuccess;
 
+/**
+ * Typed error signaling that the active Moodle browser session expired,
+ * redirected to login/Shibboleth, fell back to Guest (`userId <= 1`), or
+ * rejected `sesskey` (`invalidsesskey` / `requirelogin`).
+ */
+export class MoodleSessionExpiredError extends Error {
+  constructor(message: string = 'Moodle session expired. Please sign in again.') {
+    super(message);
+    this.name = 'MoodleSessionExpiredError';
+  }
+}
+
+export function isSessionExpiredError(err: unknown): boolean {
+  if (err instanceof MoodleSessionExpiredError) {
+    return true;
+  }
+  if (!(err instanceof Error)) {
+    return false;
+  }
+  return (
+    err.name === 'MoodleSessionExpiredError' ||
+    /session expired|invalidsesskey|requirelogin/i.test(err.message)
+  );
+}
+
 function normalizeBaseUrl(baseUrl: string): string {
   return baseUrl.replace(/\/+$/, '');
 }
@@ -364,6 +389,9 @@ export async function fetchEnrolledCourses(
   if (first.error) {
     const code = first.exception?.errorcode ?? 'moodle_ajax_error';
     const message = first.exception?.message ?? 'Moodle returned an AJAX error.';
+    if (/^(?:invalidsesskey|requirelogin)$/i.test(code)) {
+      throw new MoodleSessionExpiredError(`Moodle AJAX error (${code}): ${message}`);
+    }
     throw new Error(`Moodle AJAX error (${code}): ${message}`);
   }
 
@@ -403,7 +431,9 @@ export async function fetchCoursePageHtml(
   const html = await response.text();
   const finalUrl = response.url || url;
   if (isUnauthenticatedMoodleHtml(html, finalUrl)) {
-    throw new Error('Moodle session expired while loading course page. Please sign in again.');
+    throw new MoodleSessionExpiredError(
+      'Moodle session expired while loading course page. Please sign in again.',
+    );
   }
 
   return html;

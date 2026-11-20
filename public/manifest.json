@@ -10,6 +10,7 @@
   ],
   "host_permissions": [
     "https://psico.elearning.unipd.it/*",
+    "https://shibidp.cca.unipd.it/*",
     "https://cdnapisec.kaltura.com/*",
     "https://cfvod.kaltura.com/*",
     "https://cdnsecakmi.kaltura.com/*"

@@ -5,6 +5,8 @@ import type {
   DownloadHistoryEntry,
   EnrolledCourse,
   LectureActivity,
+  StoredAuthConfig,
+  UnipdDomain,
 } from '../core/types.js';
 
 export interface PublicSessionStatus {
@@ -134,8 +136,19 @@ export interface DownloadQueueState {
 }
 
 export type ExtensionRequest =
-  | { type: 'GET_SESSION_STATUS' }
+  | { type: 'GET_SESSION_STATUS'; autoLogin?: boolean }
   | { type: 'OPEN_SSO_LOGIN' }
+  | { type: 'GET_AUTH_CONFIG' }
+  | {
+      type: 'SAVE_AUTH_CREDENTIALS';
+      username: string;
+      domain: UnipdDomain;
+      password: string;
+      enabled: boolean;
+    }
+  | { type: 'CLEAR_AUTH_CREDENTIALS' }
+  | { type: 'SET_AUTO_LOGIN_ENABLED'; enabled: boolean }
+  | { type: 'AUTO_LOGIN_NOW' }
   | { type: 'LIST_COURSES' }
   | { type: 'SCAN_COURSE_LECTURES'; courseId: number }
   | { type: 'RESOLVE_LECTURE_MEDIA'; activity: LectureActivity }
@@ -150,6 +163,11 @@ export type ExtensionRequest =
 export type ExtensionResponseMap = {
   GET_SESSION_STATUS: { session: PublicSessionStatus };
   OPEN_SSO_LOGIN: { opened: boolean; tabId: number | null };
+  GET_AUTH_CONFIG: { config: StoredAuthConfig };
+  SAVE_AUTH_CREDENTIALS: { config: StoredAuthConfig; session?: PublicSessionStatus };
+  CLEAR_AUTH_CREDENTIALS: { config: StoredAuthConfig };
+  SET_AUTO_LOGIN_ENABLED: { config: StoredAuthConfig; session?: PublicSessionStatus };
+  AUTO_LOGIN_NOW: { config: StoredAuthConfig; session: PublicSessionStatus };
   LIST_COURSES: { courses: EnrolledCourse[] };
   SCAN_COURSE_LECTURES: {
     courseId: number;
@@ -173,4 +191,5 @@ export type ExtensionResponse<T extends ExtensionRequest['type']> =
 export type ExtensionBroadcastEvent =
   | { type: 'QUEUE_UPDATED'; state: DownloadQueueState }
   | { type: 'SESSION_UPDATED'; session: PublicSessionStatus }
+  | { type: 'AUTH_CONFIG_UPDATED'; config: StoredAuthConfig }
   | { type: 'DOWNLOAD_HISTORY_UPDATED'; entries: DownloadHistoryEntry[] };

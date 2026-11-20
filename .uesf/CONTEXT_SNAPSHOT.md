@@ -3,17 +3,17 @@
 > Generated deterministically by `bin/uesf.mjs sync-snapshot` per `policies/SOURCE_OF_TRUTH_POLICY.md` (`DEC-023`, `DEC-026`).
 > * **Canonical Control Plane**: `.uesf/`
 > * **Snapshot Version**: `0.1.1`
-> * **Source-Ledger-SHA256**: `765347940c0493072daa074a5a9d8de6e8e1f8ea18610f66435c37bb1a8e7f24` (`765347940c04`)
+> * **Source-Ledger-SHA256**: `091ac8994ff9acf0545933f880fe7b4d01ddb9b49edd91a83fcdb3f9f834db89` (`091ac8994ff9`)
 > * **Last Ledger Update**: `2026-11-20`
 
 ## 1. Empirically Verified Repository Facts (`[VERIFIED_BY_GIT_AND_FS_PROBE]`)
-* **Canonical Specification Files on Disk**: `10`
-* **Registered Documents in `KNOWLEDGE_MAP.md`**: `10`
+* **Canonical Specification Files on Disk**: `11`
+* **Registered Documents in `KNOWLEDGE_MAP.md`**: `11`
 * **Missing Registered Files on Disk**: `0`
 * **Unindexed Canonical Markdown Files on Disk**: `0`
 * **Header-to-Registry Version Mismatches**: `0`
-* **Total Recorded Tasks (`ACCEPTED` / Total)**: `7 / 8`
-* **Total Recorded Decisions (`DEC-*`)**: `5`
+* **Total Recorded Tasks (`ACCEPTED` / Total)**: `7 / 9`
+* **Total Recorded Decisions (`DEC-*`)**: `6`
 * **Unresolved Open Questions (`OQ-*`)**: `0`
 
 ## 2. Recorded Project & Governance State (`[RECORDED_IN_LEDGER]`)
@@ -106,15 +106,17 @@ Covers all project work executed under UESF `Fast-Path` and `Standard-Contract` 
 | `TASK-006` | Phase 2A: Implement Static Course Materials (`mod_resource` & `mod_folder`), Lazy Resolvers & Side Panel Content Tabs (`v0.2.0`) | Developer | QA / Architect | Local Repository (`moodle`) | `A1` | `ACCEPTED` | Accepted by CTO & Human Stakeholder (`2026-11-20`, `HO-TASK-006-05.md`) following Round 2 Tier 2 re-verification on rebased Phase 2A (`9f80910` + `aee2afe`): Independent Architect (`68ca0879`, `CONFORMANT`), Independent QA (`57e13214`, `PASS`: `tsc --noEmit` `0`, `82/82` Vitest tests, `vite build` `63` modules, `npm audit` `0`, `0`-diff `public/manifest.json`), and Live Chrome `158.0.8127.36` E2E (`c2f818ee`, `PASS`: Shibboleth SSO `24` courses, `0` `mod_subsection` dupes across 5 course entries / `164` materials, `"Are Emotions Natural Kinds?.pdf"` `.pdf` badge & `368,991 B` `%PDF-` download, keyboard `ArrowRight` & `Space` DOM-node reuse focus retention, zero-secret storage). |
 | `TASK-007` | Phase 2B: UX Persistence, Secret-Free Download History Badge, Queue Retry & HLS-Only Diagnostics (`v0.2.0`) | Developer | QA / Architect | Local Repository (`moodle`) | `A1` | `ACCEPTED` | Accepted by CTO & Human Stakeholder (`2026-11-20`, `HO-TASK-007-03.md`) on hardened commit `c4ffd60` following independent Tier 2 verification: Independent Architect (`80e3e610`, `CONFORMANT`, `0 CRITICAL`/`0 HIGH`/`0 MEDIUM` after monotonic `attemptId` guard verified in `942d7f8..c4ffd60`), Independent QA (`62c9b7de`, `PASS_WITH_FINDINGS`, `0` Critical/High/Medium: `tsc --noEmit` `0`, `91/91` Vitest tests across `8` files, `vite build` `64` modules, CI static `dist/` checks exit `0`, `0` `npm audit` vulns, `0`-diff `public/manifest.json` & `package.json`, `CLEAN` snapshot), and Live Authenticated Chrome `158.0.8127.36` E2E (`8c2859e4`, `PASS`: `5/5` scenarios on `942d7f8` against `psico.elearning.unipd.it`, `%PDF-1.4` & MP4 `ftypisom` verified on disk, DOM focus stability across `DOWNLOAD_HISTORY_UPDATED`, `0` console/SW errors, `0` secrets/PII in storage; `0`-diff `src/ui/` & `src/core/` in `942d7f8..c4ffd60`). |
 | `TASK-008` | Phase 2C: `local_kalturamediagallery` (`media19.elearning.unipd.it`) Live `A0` Investigation Spike & Optional Supplement | Architect / Developer | CTO / QA | Local Repository (`moodle`) | `A0` | `PROPOSED` | Sequenced after `TASK-007` (`DEC-005`); `A0` read-only LTI/KAF feasibility spike required prior to any `optional_host_permissions` (`A3`) contract. |
+| `TASK-009` | Automatic UniPD Shibboleth SSO Login & Encrypted Credential Storage (`DSC-001`, `DEC-006`) | Developer | Security / Architect / QA | Local Repository (`moodle`, `feat/TASK-009-auto-shibboleth-login`) | `A1` | `IN_REVIEW` | `HO-TASK-009-02.md` / `EV-TASK-009-01`: `S1` AES-256-GCM + non-extractable IndexedDB `CryptoKey` vault, `T1` headless Shibboleth SAML2 flow, `withAutoReauth` singleflight + lockout breaker, `https://shibidp.cca.unipd.it/*` permission, and Side Panel Auto-Login UI implemented; `tsc --noEmit` (`0`), `108/108` Vitest tests across `11` files, `vite build` (`67` modules), CI static `dist/` checks, `npm audit` (`0`), and `sync-snapshot` (`CLEAN`) verified. Pending independent `Security` / `Architect` / `QA` review and live authenticated Chrome E2E (`A3`). |
 
 ## 5. Active Outbound Task Queue
-* None (`TASK-007` accepted and merged; `TASK-008` remains `PROPOSED` awaiting authorization).
+* `TASK-009` (`IN_REVIEW` -> `.uesf/handoffs/HO-TASK-009-02.md`): Submitted for independent `Security`, `Architect`, and `QA` review on `feat/TASK-009-auto-shibboleth-login`.
+* `TASK-008` remains `PROPOSED` awaiting separate authorization.
 
 ### 2.3 Architectural & Governance Decisions (`.uesf/DECISION_LOG.md`)
 # Architectural & Governance Decision Log
 * **Document ID**: MOODLE-CTRL-004
 * **Canonical Path**: .uesf/DECISION_LOG.md
-* **Version**: 0.1.3
+* **Version**: 0.1.4
 * **Status**: Verified
 * **Owner**: CTO
 * **Last Updated**: 2026-11-20
@@ -133,6 +135,7 @@ Governs all technical architecture, governance, and tooling decisions recorded w
 | `DEC-003` | MV3 Architecture, Tech Stack & MVP Scope (`OQ-002`) | Adopt Option A (Single-Package Pure MV3 Chrome Extension): flat modular layout (`src/{core,extension,ui}`, `tests/`), Chrome Side Panel (`chrome.sidePanel`) in Vanilla TypeScript + semantic HTML/CSS, headless `fetch()` pipeline (`/my/courses.php` `sesskey` -> Moodle AJAX `core_course_get_enrolled_courses_by_timeline_classification` -> `/course/view.php` `#region-main` parser -> `/mod/kalvidres/player_bridge.php` -> Kaltura `multirequest` -> direct progressive MP4 `format/url` + `.vtt` subtitles + Moodle `pluginfile.php` MP4s) downloaded via a bounded `chrome.downloads.download()` queue (max 2 concurrent); verified with TypeScript (`tsc --noEmit`), Vite (`npm run build`), and Vitest (`npm test`). Phase 1 MVP (`v0.1.0`) targets video lectures + `.vtt` subtitles; static PDFs/slides (`mod_resource`, `mod_folder`), Media Gallery LTI fallback, and Offscreen HLS fallback are deferred to Phase 2 (`v0.2.0`). | Confirmed | Human Stakeholder / CTO (`A2`) | 2026-11-19 |
 | `DEC-004` | Snapshot Tooling Patch (`KDP-001`) | Approve `KDP-001` (`PATCH`): update local vendored `.uesf/bin/uesf.mjs` `walkMdFiles()` to unconditionally skip `.git`, `handoffs`, and `node_modules` (`ALWAYS_SKIP_DIRS`), and skip build/cache artifact directories (`dist`, `.vite`, `coverage`, `build`, `.venv`, `venv`, `target`) during `sync-snapshot` (`excludeDistAndSnap = true`) so third-party package Markdown files never trigger false-positive `UNINDEXED_MD_ON_DISK` drift alerts. Zero-dependency static denylist preserved; upstream backport to UESF `v0.9.1` (`C:/Users/user/Project/uesf`) tracked separately outside `moodle` workspace scope. | Approved | CTO (`A2`) / DevOps | 2026-11-20 |
 | `DEC-005` | Phase 2 (`v0.2.0`) Roadmap, Materials Path & Permission Boundaries | Ratify incremental Phase 2 (`v0.2.0`) plan documented in `docs/architecture/02-phase2-v0.2.0-blueprint.md`: (1) `TASK-005` GitHub Actions CI + `OQ-001`/`DEC-005` governance commit (`Fast-Path`); (2) `TASK-006` Phase 2A Static Course Materials (`mod_resource` PDFs/slides/datasets + `mod_folder` packs, zero new manifest permissions, lazy resolution to prevent request storms on 50+ item courses, Option A subfolder layout `UniPD/{AY}/{Course}/{Section}/Materials/...`); (3) `TASK-007` Phase 2B UX, Persistence & Queue Polish (persistent `chrome.storage.local` prefs, secret-free download history badge, 1-click Retry via persisted descriptors, HLS-only diagnostic detection); (4) `TASK-008` Phase 2C `local_kalturamediagallery` (`media19.elearning.unipd.it`) starting with an `A0` live investigation spike before any `optional_host_permissions` (`A3`) addition. Defer Offscreen HLS remuxing (`chrome.offscreen`) to `v0.3.0+` unless HLS-only telemetry is actually observed on UniPD. | Confirmed | Human Stakeholder / CTO (`A2`) | 2026-11-20 |
+| `DEC-006` | Automatic UniPD Shibboleth SSO & Encrypted Local Storage (`DSC-001`) | Ratify opt-in automatic UniPD Shibboleth SSO login (`docs/architecture/03-auto-shibboleth-auth.md`, `MOODLE-DOC-007`) while preserving strict `polisdk` independence (`DEC-002`) and unidirectional layer isolation (`DEC-003`): (1) `S1` zero-prompt credential storage via Web Crypto `AES-256-GCM` in `chrome.storage.local` with a random non-extractable `CryptoKey` in IndexedDB and write-only SW boundary; (2) scoped to UniPD Shibboleth `username` (`name.surname@studenti.unipd.it` full input or `@studenti.unipd.it`/`@unipd.it` domain), and `password`; (3) `T1` headless Service Worker `fetch()` flow (`e1s1` -> `e1s2` -> `/sp-shibboleth.sso/SAML2/POST`) adding `"https://shibidp.cca.unipd.it/*"` to `public/manifest.json` `host_permissions`, with singleflight re-auth (`withAutoReauth`) and persistent lockout circuit breaker on failed credentials (`T2` background tab + `chrome.scripting` reserved strictly as contingency if live SP `POST` blocks extension `Origin`). | Confirmed | Human Stakeholder (`A3`) / CTO (`A2`) | 2026-11-20 |
 
 ## 4. Open Questions & Pending Human Decisions (`A3` / Clarification Items)
 | Question ID | Topic | Resolution Summary | Status |
@@ -173,14 +176,15 @@ Covers all tracked Markdown documents in the `moodle` repository (`README.md`, `
 | `MOODLE-CTRL-001` | `.uesf/EXTENSION.md` | Layer 6: Project Extension | Architect | `0.1.1` | Verified |
 | `MOODLE-CTRL-002` | `.uesf/KNOWLEDGE_MAP.md` | Operational State Index | CTO | `0.1.0` | Verified |
 | `MOODLE-CTRL-003` | `.uesf/ACTIVE_TASKS.md` | Operational Task Ledger | CTO | `0.1.0` | Verified |
-| `MOODLE-CTRL-004` | `.uesf/DECISION_LOG.md` | Operational Decision Log | CTO | `0.1.3` | Verified |
+| `MOODLE-CTRL-004` | `.uesf/DECISION_LOG.md` | Operational Decision Log | CTO | `0.1.4` | Verified |
 | `MOODLE-DOC-001` | `README.md` | Domain 2: Project Overview | Architect | `0.1.0` | Verified |
 | `MOODLE-DOC-002` | `docs/investigation/01-auth-and-session-flow.md` | Domain 2: Investigation Spec | Architect | `0.1.0` | Verified |
 | `MOODLE-DOC-003` | `docs/investigation/02-course-and-lecture-discovery.md` | Domain 2: Investigation Spec | Architect | `0.1.0` | Verified |
 | `MOODLE-DOC-004` | `docs/investigation/03-video-playback-and-download-mechanics.md` | Domain 2: Investigation Spec | Architect | `0.1.0` | Verified |
 | `MOODLE-DOC-005` | `docs/architecture/01-discovery-synthesis-and-options.md` | Domain 2: Architecture & OQ-002 | Architect | `0.1.0` | Verified |
 | `MOODLE-DOC-006` | `docs/architecture/02-phase2-v0.2.0-blueprint.md` | Domain 2: Phase 2 (`v0.2.0`) Blueprint | Architect | `0.1.0` | Approved |
+| `MOODLE-DOC-007` | `docs/architecture/03-auto-shibboleth-auth.md` | Domain 2: Auto Shibboleth Auth Spec (`DEC-006`) | Architect | `0.1.0` | Approved |
 
 ## 3. Automated Discrepancy & Drift Audit (`[DRIFT_CHECK]`)
 * **Drift Audit Verdict**: `CLEAN (0 discrepancies between canonical ledgers and on-disk specification tree)`
-* **Cloud / Remote Session Note**: When reading this file remotely without local `CAP-FS`/`CAP-GIT`, treat Section 1 as verified at the time of the commit that produced `Source-Ledger-SHA256: 765347940c04`, treat Section 2 as `[REPORTED — Remote Ledger]`, and treat any uncommitted local working-tree edits as `[UNKNOWN — Local FS Unavailable]`.
+* **Cloud / Remote Session Note**: When reading this file remotely without local `CAP-FS`/`CAP-GIT`, treat Section 1 as verified at the time of the commit that produced `Source-Ledger-SHA256: 091ac8994ff9`, treat Section 2 as `[REPORTED — Remote Ledger]`, and treat any uncommitted local working-tree edits as `[UNKNOWN — Local FS Unavailable]`.
