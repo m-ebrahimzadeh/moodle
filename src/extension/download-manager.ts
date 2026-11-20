@@ -529,6 +529,9 @@ export class DownloadManager {
       nextEntry.item.error = null;
       nextEntry.cancelRequested = false;
       await this.emitAndPersist();
+      if (this.isEntryCancelled(nextEntry)) {
+        continue;
+      }
 
       try {
         const rawUrl = await this.resolveDownloadUrl(descriptor);

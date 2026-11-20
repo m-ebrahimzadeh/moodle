@@ -88,12 +88,9 @@ function hasLoginIndexLink(html: string): boolean {
   return /href=["'][^"']*\/login\/index\.php(?:\?[^"']*)?["']/i.test(html);
 }
 
-function hasGuestSessionMarker(html: string): boolean {
-  return (
-    hasBodyClass(html, 'guest') ||
-    /you are currently using guest access|sei attualmente collegato come ospite|accesso come ospite/i.test(
-      html,
-    )
+function hasGuestAccessText(html: string): boolean {
+  return /you are currently using guest access|sei attualmente collegato come ospite|accesso come ospite/i.test(
+    html,
   );
 }
 
@@ -107,21 +104,31 @@ export function isUnauthenticatedMoodleHtml(html: string, finalUrl: string): boo
     isLoginPageUrl(finalUrl) ||
     hasBodyClass(html, 'notloggedin') ||
     hasBodyClass(html, 'pagelayout-login') ||
+    hasBodyClass(html, 'guest') ||
     /<form\b[^>]*\bid=["']login["']/i.test(html) ||
-    /<form\b[^>]*\bid=["']user-login-form["']/i.test(html) ||
-    hasGuestSessionMarker(html)
+    /<form\b[^>]*\bid=["']user-login-form["']/i.test(html)
   ) {
     return true;
   }
 
+  // Scope M.cfg.userId inspection strictly to Moodle's M.cfg block so non-M.cfg
+  // HTML (e.g. Kaltura player_bridge.php PlayKit analytics JSON) cannot trigger
+  // false-positive session-expiry errors on unrelated "userId": 0|1 fields.
   const cfgBlock = extractMoodleConfigBlock(html);
-  const userId = extractUserId(html, cfgBlock);
-  if (userId !== null && userId <= 1) {
+  const cfgUserId = cfgBlock !== null ? extractUserId(cfgBlock, cfgBlock) : null;
+  if (cfgUserId !== null && cfgUserId <= 1) {
+    return true;
+  }
+
+  // Only fall back to guest text-phrase heuristics when no positive M.cfg.userId > 1
+  // is present, so authenticated course pages mentioning "accesso come ospite" in
+  // course syllabi or announcements are not falsely rejected.
+  if (cfgUserId === null && hasGuestAccessText(html)) {
     return true;
   }
 
   // Full Moodle page (contains M.cfg) without userId that links to login but not logout
-  if (cfgBlock !== null && userId === null && hasLoginIndexLink(html) && !hasLogoutLink(html)) {
+  if (cfgBlock !== null && cfgUserId === null && hasLoginIndexLink(html) && !hasLogoutLink(html)) {
     return true;
   }
 

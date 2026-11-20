@@ -4,6 +4,7 @@ import {
   fetchCoursePageHtml,
   fetchEnrolledCourses,
   fetchMoodleSession,
+  isUnauthenticatedMoodleHtml,
   parseCourseMetadata,
 } from '../src/core/moodle-client.js';
 import { DEFAULT_MOODLE_BASE_URL } from '../src/core/types.js';
@@ -96,6 +97,41 @@ describe('moodle-client', () => {
       );
       expect(authInfo.authenticated).toBe(true);
       expect(authInfo.sesskey).toBe('AUTHNOID1');
+    });
+
+    it('does not falsely flag non-M.cfg player_bridge HTML containing PlayKit "userId": 0|1 [ARCH-NOTE-001]', () => {
+      const bridgeWithPlaykitUserId = `<!doctype html>
+        <html><body>
+          <script>
+            var playkitAnalytics = {"userId": 0, "viewerRole": "student"};
+            var uiconf_id = "42974781";
+            var partner_id = "2203921";
+            var entry_id = "1_abc12345";
+            var ks = "TEST_KS_TOKEN";
+          </script>
+        </body></html>`;
+
+      expect(
+        isUnauthenticatedMoodleHtml(
+          bridgeWithPlaykitUserId,
+          'https://psico.elearning.unipd.it/mod/kalvidres/player_bridge.php?cmid=300154',
+        ),
+      ).toBe(false);
+    });
+
+    it('does not falsely flag authenticated M.cfg userId > 1 course HTML mentioning "accesso come ospite" [QA-LOW-2]', () => {
+      const authenticatedCourseWithSyllabusText = `<!doctype html>
+        <body class="course-view">
+          <div id="region-main"><p>Nota: accesso come ospite non abilitato per questo corso.</p></div>
+          <script>M.cfg = {"wwwroot":"https://psico.elearning.unipd.it","sesskey":"AUTH99999","userId":42019};</script>
+        </body>`;
+
+      expect(
+        isUnauthenticatedMoodleHtml(
+          authenticatedCourseWithSyllabusText,
+          'https://psico.elearning.unipd.it/course/view.php?id=7075',
+        ),
+      ).toBe(false);
     });
   });
 

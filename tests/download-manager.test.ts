@@ -541,6 +541,43 @@ describe('download-manager', () => {
     expect(synced.items[0]?.error).toBe(CANCELLED_BY_USER_MESSAGE);
   });
 
+  it('skips resolveDownloadUrl if cancelled while initial in_progress persistence is in-flight [QA-LOW-4]', async () => {
+    let releaseSave!: () => void;
+    let saveCallCount = 0;
+    const resolveSpy = vi.fn(createDefaultResolver());
+    const chromeMock = createInMemoryChromeDownloads(850);
+
+    const manager = new DownloadManager({
+      api: chromeMock.api,
+      maxConcurrent: 1,
+      resolveDownloadUrl: resolveSpy,
+      storage: {
+        load: async () => [],
+        save: async () => {
+          saveCallCount += 1;
+          // 1st save is inside enqueue(); 2nd save is the in_progress transition before resolveDownloadUrl()
+          if (saveCallCount === 2) {
+            await new Promise<void>((resolve) => {
+              releaseSave = resolve;
+            });
+          }
+        },
+      },
+    });
+
+    const enqueuePromise = manager.enqueue([makeItem(1)]);
+    await new Promise((r) => setTimeout(r, 10));
+
+    const taskId = manager.getState().items[0]!.id;
+    const cancelPromise = manager.cancel(taskId);
+    releaseSave();
+    await Promise.all([enqueuePromise, cancelPromise]);
+
+    expect(resolveSpy).not.toHaveBeenCalled();
+    expect(chromeMock.downloadSpy).not.toHaveBeenCalled();
+    expect(manager.getState().items[0]?.status).toBe('cancelled');
+  });
+
   it('deduplicates active (queued / in_progress) entries by (cmid, kind, filename) while allowing re-enqueue after completion [QA-005]', async () => {
     const chromeMock = createInMemoryChromeDownloads(900);
     const manager = new DownloadManager({

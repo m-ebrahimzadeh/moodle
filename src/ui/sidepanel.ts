@@ -356,9 +356,10 @@ function updateLectureRow(cmid: number): void {
 
   const activity = entry.activity;
   const nonDownloadableResolved = entry.resolved !== null && !isEntryDownloadable(entry);
+  const failedResolution = entry.error !== null;
 
   refs.checkbox.checked = entry.selected;
-  refs.checkbox.disabled = nonDownloadableResolved;
+  refs.checkbox.disabled = nonDownloadableResolved || failedResolution;
 
   // Rebuild only the status/metadata badges inside this row — leaves focus & <select> untouched
   const metaNodes: Node[] = [];
@@ -369,15 +370,31 @@ function updateLectureRow(cmid: number): void {
   metaNodes.push(typeBadge);
 
   if (entry.resolving) {
+    refs.checkbox.removeAttribute('aria-describedby');
     const loading = document.createElement('span');
     loading.textContent = 'Resolving stream…';
     metaNodes.push(loading);
   } else if (entry.error) {
+    const errId = `lecture-err-${activity.cmid}`;
     const errSpan = document.createElement('span');
+    errSpan.id = errId;
     errSpan.className = 'badge badge-err';
     errSpan.textContent = entry.error;
     metaNodes.push(errSpan);
+    refs.checkbox.setAttribute('aria-describedby', errId);
+
+    const retryBtn = document.createElement('button');
+    retryBtn.type = 'button';
+    retryBtn.className = 'btn btn-sm';
+    retryBtn.textContent = 'Retry';
+    retryBtn.setAttribute('aria-label', `Retry ${activity.title}`);
+    retryBtn.addEventListener('click', () => {
+      entry.error = null;
+      void resolveSingleLecture(entry, state.scanGeneration);
+    });
+    metaNodes.push(retryBtn);
   } else if (entry.resolved) {
+    refs.checkbox.removeAttribute('aria-describedby');
     const activeFlavor = getSelectedFlavor(entry);
     if (activeFlavor || entry.resolved.hasDirectMp4) {
       if (entry.resolved.durationSec) {
@@ -877,6 +894,9 @@ async function selectCourse(course: EnrolledCourse): Promise<void> {
       await resolveLecturesBounded(allActivities, generation);
     }
   } catch (err) {
+    if (state.scanGeneration !== generation) {
+      return;
+    }
     showAlert(err instanceof Error ? err.message : 'Failed to scan course lectures.');
     renderLecturesStructure();
   }
@@ -960,8 +980,29 @@ async function enqueueSelectedDownloads(): Promise<void> {
         });
 
         if (state.includeVtt && entry.resolved.captions.length > 0) {
+          const baseCounts = new Map<string, number>();
           for (const caption of entry.resolved.captions) {
-            const langSuffix = caption.languageCode || caption.label;
+            const base = (caption.languageCode || caption.label).trim().toLowerCase();
+            baseCounts.set(base, (baseCounts.get(base) ?? 0) + 1);
+          }
+          const usedSuffixes = new Set<string>();
+
+          for (const caption of entry.resolved.captions) {
+            const baseSuffix = (caption.languageCode || caption.label).trim();
+            const baseKey = baseSuffix.toLowerCase();
+            let langSuffix = baseSuffix;
+            if ((baseCounts.get(baseKey) ?? 0) > 1) {
+              const labelPart = caption.label.trim();
+              langSuffix =
+                labelPart && labelPart.toLowerCase() !== baseKey
+                  ? `${baseSuffix}-${labelPart}`
+                  : `${baseSuffix}-${caption.index + 1}`;
+            }
+            if (usedSuffixes.has(langSuffix.toLowerCase())) {
+              langSuffix = `${baseSuffix}-${caption.index + 1}`;
+            }
+            usedSuffixes.add(langSuffix.toLowerCase());
+
             const captionPath = buildLectureDownloadPath({
               academicYear: course.academicYear,
               courseCode: course.courseCode,

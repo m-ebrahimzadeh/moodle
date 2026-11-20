@@ -134,6 +134,43 @@ describe('service-worker helpers', () => {
         'https://psico.elearning.unipd.it/pluginfile.php/99/mod_resource/content/0/clip.mp4',
       );
       expect(resolved.flavors[0]?.sizeBytes).toBe(12345678);
+      expect(resolved.flavors[0]?.fileExt).toBe('mp4');
+    });
+
+    it('aborts cross-origin HTML redirects before reading body and preserves non-MP4 video extensions [ARCH-NOTE-004]', async () => {
+      let capturedSignal: AbortSignal | undefined;
+      const textSpy = vi.fn(async () => '<html>external</html>');
+      const externalRedirectFetch = vi.fn<typeof fetch>(async (_input, init) => {
+        capturedSignal = init?.signal ?? undefined;
+        return {
+          ok: true,
+          status: 200,
+          url: 'https://external.example/embed/video',
+          headers: new Headers({ 'Content-Type': 'text/html; charset=utf-8' }),
+          text: textSpy,
+        } as unknown as Response;
+      });
+
+      const externalResult = await resolveMoodleHostedMp4(makeActivity(), externalRedirectFetch);
+      expect(capturedSignal?.aborted).toBe(true);
+      expect(textSpy).not.toHaveBeenCalled();
+      expect(externalResult.directMp4Url).toBeNull();
+      expect(externalResult.flavors).toEqual([]);
+
+      const webmFetch = vi.fn<typeof fetch>(async () => {
+        const res = new Response(null, {
+          status: 200,
+          headers: { 'Content-Type': 'video/webm', 'Content-Length': '2048000' },
+        });
+        Object.defineProperty(res, 'url', {
+          value: 'https://psico.elearning.unipd.it/pluginfile.php/99/mod_resource/content/0/clip.webm',
+        });
+        return res;
+      });
+
+      const webmResult = await resolveMoodleHostedMp4(makeActivity(), webmFetch);
+      expect(webmResult.flavors[0]?.fileExt).toBe('webm');
+      expect(webmResult.flavors[0]?.sizeBytes).toBe(2048000);
     });
   });
 

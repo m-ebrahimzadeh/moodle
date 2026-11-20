@@ -197,6 +197,28 @@ function isHtmlContentType(contentType: string): boolean {
   return contentType.includes('text/html') || contentType.includes('application/xhtml+xml');
 }
 
+function isSameOrigin(urlString: string, expectedOrigin: string): boolean {
+  try {
+    return new URL(urlString).origin === expectedOrigin;
+  } catch {
+    return false;
+  }
+}
+
+function inferVideoExtension(contentType: string, urlString: string): string {
+  if (contentType.includes('video/webm')) {
+    return 'webm';
+  }
+  if (contentType.includes('video/quicktime')) {
+    return 'mov';
+  }
+  if (contentType.includes('video/x-m4v')) {
+    return 'm4v';
+  }
+  const urlMatch = urlString.match(/\.(mp4|m4v|webm|mov)(?:[?#]|$)/i);
+  return urlMatch?.[1]?.toLowerCase() ?? 'mp4';
+}
+
 export async function resolveMoodleHostedMp4(
   activity: LectureActivity,
   fetchImpl: typeof fetch = fetch,
@@ -236,18 +258,32 @@ export async function resolveMoodleHostedMp4(
 
   let mp4Url: string | null = null;
   let sizeBytes = 0;
+  let fileExt = 'mp4';
 
   if (
     contentType.startsWith('video/') ||
-    (/\.mp4(?:[?#]|$)/i.test(finalUrl) && !isHtmlContentType(contentType))
+    (/\.(?:mp4|m4v|webm|mov)(?:[?#]|$)/i.test(finalUrl) && !isHtmlContentType(contentType))
   ) {
-    // Do not buffer a multi-hundred-MB MP4 body into service worker memory.
+    // Do not buffer a multi-hundred-MB video body into service worker memory.
     const lengthHeader = response.headers.get('content-length');
     const parsedLen = lengthHeader ? Number.parseInt(lengthHeader, 10) : 0;
     sizeBytes = Number.isFinite(parsedLen) && parsedLen > 0 ? parsedLen : 0;
+    fileExt = inferVideoExtension(contentType, finalUrl);
     controller.abort();
     mp4Url = validateAllowedMediaUrl(finalUrl, ALLOWED_MEDIA_ORIGINS);
   } else if (isHtmlContentType(contentType)) {
+    if (!isSameOrigin(finalUrl, MOODLE_ORIGIN)) {
+      controller.abort();
+      return {
+        cmid: activity.cmid,
+        entryId: null,
+        lectureTitle: activity.title,
+        durationSec: null,
+        flavors: [],
+        captions: [],
+        directMp4Url: null,
+      };
+    }
     const html = await response.text();
     if (isUnauthenticatedMoodleHtml(html, finalUrl)) {
       throw new Error('Moodle session expired. Please sign in with UniPD SSO again.');
@@ -255,6 +291,7 @@ export async function resolveMoodleHostedMp4(
     const extracted = extractPluginfileMp4Url(html, DEFAULT_MOODLE_BASE_URL);
     if (extracted) {
       mp4Url = validateAllowedMediaUrl(extracted, ALLOWED_MEDIA_ORIGINS);
+      fileExt = inferVideoExtension('', mp4Url);
       sizeBytes = await probeContentLength(mp4Url, fetchImpl);
     }
   } else {
@@ -296,7 +333,7 @@ export async function resolveMoodleHostedMp4(
         height: 0,
         bitrateKbps: 0,
         sizeBytes,
-        fileExt: 'mp4',
+        fileExt,
         isOriginal: true,
         downloadUrl: mp4Url,
       },
@@ -331,6 +368,13 @@ export async function resolveActivityMedia(
     if (isLoginPageUrl(finalUrl)) {
       controller.abort();
       throw new Error('Moodle session expired. Please sign in with UniPD SSO again.');
+    }
+
+    if (!isSameOrigin(finalUrl, MOODLE_ORIGIN)) {
+      controller.abort();
+      throw new Error(
+        `Kaltura player bridge for activity ${activity.cmid} redirected outside UniPD Moodle.`,
+      );
     }
 
     const contentType = (response.headers.get('content-type') ?? '').toLowerCase();
