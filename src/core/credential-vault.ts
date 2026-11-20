@@ -195,7 +195,12 @@ export async function loadCredentialsFromVault(
   cipherStorage: VaultCipherStorage,
   cryptoApi: Crypto = getWebCrypto(),
 ): Promise<LoadVaultResult> {
-  const envelope = await cipherStorage.getEnvelope();
+  let envelope: EncryptedCredentialEnvelope | null;
+  try {
+    envelope = await cipherStorage.getEnvelope();
+  } catch {
+    return { status: 'corrupted' };
+  }
   if (!envelope) {
     return { status: 'empty' };
   }
@@ -204,7 +209,12 @@ export async function loadCredentialsFromVault(
     return { status: 'corrupted' };
   }
 
-  const key = await keyStore.getKey();
+  let key: CryptoKey | null;
+  try {
+    key = await keyStore.getKey();
+  } catch {
+    return { status: 'corrupted' };
+  }
   if (!key) {
     return { status: 'corrupted' };
   }

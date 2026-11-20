@@ -187,6 +187,37 @@ describe('credential-vault (S1 AES-256-GCM + non-extractable key)', () => {
     });
   });
 
+  it('returns corrupted status cleanly when keyStore/cipherStorage rejects or envelope is malformed', async () => {
+    const throwingKeyStore: VaultKeyStore = {
+      async getKey() {
+        throw new Error('IndexedDB blocked');
+      },
+      async setKey() {},
+      async deleteKey() {},
+    };
+    const badShapeStorage: VaultCipherStorage = {
+      async getEnvelope() {
+        return { version: 2, iv: 'abc', ciphertext: 'def', updatedAt: 1 } as unknown as EncryptedCredentialEnvelope;
+      },
+      async setEnvelope() {},
+      async deleteEnvelope() {},
+    };
+    expect(await loadCredentialsFromVault(throwingKeyStore, badShapeStorage)).toEqual({
+      status: 'corrupted',
+    });
+
+    const throwingEnvelopeStorage: VaultCipherStorage = {
+      async getEnvelope() {
+        throw new Error('storage error');
+      },
+      async setEnvelope() {},
+      async deleteEnvelope() {},
+    };
+    expect(await loadCredentialsFromVault(throwingKeyStore, throwingEnvelopeStorage)).toEqual({
+      status: 'corrupted',
+    });
+  });
+
   it('rejects empty username or password', async () => {
     const adapters = createMemoryVaultAdapters();
     await expect(

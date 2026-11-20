@@ -262,4 +262,70 @@ describe('unipd-sso (T1 headless Shibboleth SAML2 flow)', () => {
     expect((caught as ShibbolethAuthError).code).toBe('NETWORK_OR_HTTP');
     expect((caught as ShibbolethAuthError).tripCircuitBreaker).toBe(false);
   });
+
+  it('pins SAMLResponse form to shibidp origin and /sp-shibboleth.sso/SAML2/POST path', () => {
+    expect(() =>
+      inspectShibbolethStepHtml(
+        '<form action="https://psico.elearning.unipd.it/evil/endpoint" method="post"><input name="SAMLResponse" value="ABC"></form>',
+        'https://shibidp.cca.unipd.it/idp/profile/SAML2/Redirect/SSO?execution=e1s2',
+      ),
+    ).toThrow(/expected Shibboleth SP endpoint/i);
+  });
+
+  it('guards against e1s1 interstitial loops and falls back to fetchMoodleSession after SAML callback', async () => {
+    const loopFetch = vi.fn<typeof fetch>(async () =>
+      makeHtmlResponse(
+        REDACTED_SHIB_E1S1_INTERSTITIAL_HTML,
+        'https://shibidp.cca.unipd.it/idp/profile/SAML2/Redirect/SSO?execution=e1s1',
+      ),
+    );
+    await expect(
+      executeHeadlessShibbolethLogin({
+        credentials: {
+          username: 'name.surname@studenti.unipd.it',
+          domain: '@studenti.unipd.it',
+          password: 'Secret',
+        },
+        fetchImpl: loopFetch,
+      }),
+    ).rejects.toThrow(/looped unexpectedly/i);
+
+    let step = 0;
+    const fallbackFetch = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      step += 1;
+      if (url.endsWith('/auth/shibboleth/index.php')) {
+        return makeHtmlResponse(
+          REDACTED_SHIB_E1S2_LOGIN_HTML,
+          'https://shibidp.cca.unipd.it/idp/profile/SAML2/Redirect/SSO?execution=e1s2',
+        );
+      }
+      if (url.includes('execution=e1s2') && init?.method === 'POST') {
+        return makeHtmlResponse(
+          REDACTED_SHIB_SAML_POST_HTML,
+          'https://shibidp.cca.unipd.it/idp/profile/SAML2/Redirect/SSO?execution=e1s2',
+        );
+      }
+      if (url.endsWith('/sp-shibboleth.sso/SAML2/POST')) {
+        return makeHtmlResponse('<html><body>Redirecting...</body></html>', 'https://psico.elearning.unipd.it/');
+      }
+      if (url.endsWith('/my/courses.php')) {
+        return makeHtmlResponse(
+          REDACTED_AUTHENTICATED_MY_COURSES_HTML,
+          'https://psico.elearning.unipd.it/my/courses.php',
+        );
+      }
+      throw new Error(`Unexpected step ${step}: ${url}`);
+    });
+
+    const verified = await executeHeadlessShibbolethLogin({
+      credentials: {
+        username: 'name.surname@studenti.unipd.it',
+        domain: '@studenti.unipd.it',
+        password: 'Secret',
+      },
+      fetchImpl: fallbackFetch,
+    });
+    expect(verified.authenticated).toBe(true);
+  });
 });

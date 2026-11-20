@@ -280,4 +280,103 @@ describe('AuthManager (singleflight, session reuse, circuit breaker, write-only 
     expect(cfg.enabled).toBe(false);
     expect(cfg.blockedReason).toMatch(/re-enter/i);
   });
+
+  it('prevents stale in-flight failure from overwriting newly saved or cleared credentials via authEpoch', async () => {
+    const backing = createMemoryAuthBacking();
+    let releaseSlowLogin!: () => void;
+    const slowLoginStarted = new Promise<void>((resolve) => {
+      let resolved = false;
+      const notify = () => {
+        if (!resolved) {
+          resolved = true;
+          resolve();
+        }
+      };
+      // Hooked inside fetchMock below
+      (backing as { notifyStart?: () => void }).notifyStart = notify;
+    });
+
+    let authenticated = false;
+    let callNum = 0;
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith('/my/courses.php')) {
+        return makeHtmlResponse(
+          authenticated ? REDACTED_AUTHENTICATED_MY_COURSES_HTML : REDACTED_GUEST_MY_COURSES_HTML,
+          'https://psico.elearning.unipd.it/my/courses.php',
+        );
+      }
+      if (url.endsWith('/auth/shibboleth/index.php')) {
+        return makeHtmlResponse(
+          REDACTED_SHIB_E1S2_LOGIN_HTML,
+          'https://shibidp.cca.unipd.it/idp/profile/SAML2/Redirect/SSO?execution=e1s2',
+        );
+      }
+      if (url.includes('execution=e1s2') && init?.method === 'POST') {
+        callNum += 1;
+        const body = new URLSearchParams(String(init.body ?? ''));
+        if (callNum === 1) {
+          (backing as { notifyStart?: () => void }).notifyStart?.();
+          await new Promise<void>((resolve) => {
+            releaseSlowLogin = resolve;
+          });
+          return makeHtmlResponse(
+            REDACTED_SHIB_E1S2_INVALID_LOGIN_HTML,
+            'https://shibidp.cca.unipd.it/idp/profile/SAML2/Redirect/SSO?execution=e1s3',
+          );
+        }
+        if (body.get('j_password') === 'NewGoodPassword!') {
+          return makeHtmlResponse(
+            REDACTED_SHIB_SAML_POST_HTML,
+            'https://shibidp.cca.unipd.it/idp/profile/SAML2/Redirect/SSO?execution=e1s2',
+          );
+        }
+        return makeHtmlResponse(
+          REDACTED_SHIB_E1S2_INVALID_LOGIN_HTML,
+          'https://shibidp.cca.unipd.it/idp/profile/SAML2/Redirect/SSO?execution=e1s3',
+        );
+      }
+      if (url.endsWith('/sp-shibboleth.sso/SAML2/POST') && init?.method === 'POST') {
+        authenticated = true;
+        return makeHtmlResponse(
+          REDACTED_AUTHENTICATED_MY_COURSES_HTML,
+          'https://psico.elearning.unipd.it/my/courses.php',
+        );
+      }
+      throw new Error(`Unexpected URL ${url}`);
+    });
+
+    const auth = new AuthManager({ ...backing, fetchImpl: fetchMock });
+    await auth.saveCredentials({
+      username: 'name.surname@studenti.unipd.it',
+      domain: '@studenti.unipd.it',
+      password: 'OldBadPassword!',
+      enabled: true,
+    });
+
+    // Start slow old-credential login, then overwrite credentials mid-flight
+    const oldLoginPromise = auth.ensureAuthenticated().catch((e) => e);
+    await slowLoginStarted;
+
+    await auth.saveCredentials({
+      username: 'name.surname@studenti.unipd.it',
+      domain: '@studenti.unipd.it',
+      password: 'NewGoodPassword!',
+      enabled: true,
+    });
+
+    const newLoginPromise = auth.ensureAuthenticated();
+    releaseSlowLogin();
+
+    const [oldResult, newResult] = await Promise.all([oldLoginPromise, newLoginPromise]);
+    expect(oldResult).toBeInstanceOf(Error);
+    expect(newResult.authenticated).toBe(true);
+    expect((await auth.getAuthConfig()).blockedReason).toBeNull();
+
+    // forceAutoLogin bypasses paused enabled=false and clears prior blockedReason on success
+    await auth.setAutoLoginEnabled(false);
+    authenticated = false;
+    const forced = await auth.ensureAuthenticated({ allowAutoLogin: true, forceAutoLogin: true });
+    expect(forced.authenticated).toBe(true);
+  });
 });

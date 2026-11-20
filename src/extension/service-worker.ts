@@ -3,6 +3,7 @@ import {
   DOWNLOAD_HISTORY_STORAGE_KEY,
   MAX_DOWNLOAD_HISTORY_ENTRIES,
   MoodleSessionExpiredError,
+  ShibbolethAuthError,
   UNIPD_SHIBBOLETH_LOGIN_PATH,
   buildDownloadHistoryKey,
   buildFolderFileHistoryVariant,
@@ -1063,13 +1064,21 @@ export async function handleMessage(
 
   switch (request.type) {
     case 'GET_SESSION_STATUS': {
-      let session = await fetchMoodleSession(DEFAULT_MOODLE_BASE_URL);
-      if (!session.authenticated && request.autoLogin !== false) {
-        try {
-          session = await auth.ensureAuthenticated({ allowAutoLogin: true });
-        } catch {
-          // Blocked or transient auto-login failure; circuit-breaker config was broadcast.
+      let session: MoodleSessionInfo;
+      try {
+        session = await auth.ensureAuthenticated({
+          allowAutoLogin: request.autoLogin !== false,
+        });
+      } catch (err) {
+        if (!(err instanceof ShibbolethAuthError)) {
+          throw err;
         }
+        session = {
+          authenticated: false,
+          userId: null,
+          sesskey: null,
+          loginUrl: `${DEFAULT_MOODLE_BASE_URL}${UNIPD_SHIBBOLETH_LOGIN_PATH}`,
+        };
       }
       await writeSsoProbeState({
         lastKnownAuthenticated: session.authenticated,

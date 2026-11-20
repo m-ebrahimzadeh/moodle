@@ -10,6 +10,7 @@ import {
 } from './types.js';
 
 export const UNIPD_IDP_ORIGIN = 'https://shibidp.cca.unipd.it';
+export const UNIPD_SP_SAML_POST_PATH = '/sp-shibboleth.sso/SAML2/POST';
 
 export type ShibbolethAuthErrorCode =
   | 'INVALID_CREDENTIALS'
@@ -159,37 +160,46 @@ export function inspectShibbolethStepHtml(
 
   const root = parse(html);
 
-  // 1. SAML2 Auto-POST response form targeting UniPD Moodle SP (/sp-shibboleth.sso/SAML2/POST)
-  for (const form of root.querySelectorAll('form')) {
-    const samlInput = form.querySelector('input[name="SAMLResponse"]');
-    if (!samlInput) {
-      continue;
-    }
-    const rawAction = form.getAttribute('action')?.trim();
-    if (!rawAction) {
+  // 1. SAML2 Auto-POST response form from UniPD IdP targeting /sp-shibboleth.sso/SAML2/POST
+  if (currentOrigin === normalizedIdpOrigin) {
+    for (const form of root.querySelectorAll('form')) {
+      const samlInput = form.querySelector('input[name="SAMLResponse"]');
+      if (!samlInput) {
+        continue;
+      }
+      const rawAction = form.getAttribute('action')?.trim();
+      if (!rawAction) {
+        return {
+          kind: 'unexpected',
+          reason: 'SAML response form is missing its target action URL.',
+        };
+      }
+      const actionUrl = validateAllowedOriginUrl(
+        rawAction,
+        pageUrl,
+        new Set([moodleOrigin]),
+        'SAML callback',
+      );
+      if (new URL(actionUrl).pathname !== UNIPD_SP_SAML_POST_PATH) {
+        throw new ShibbolethAuthError(
+          'UniPD SSO SAML callback path is not the expected Shibboleth SP endpoint.',
+          'UNSUPPORTED_CHALLENGE',
+          true,
+        );
+      }
+      const fields = collectFormInputs(form);
+      if (!fields.SAMLResponse) {
+        return {
+          kind: 'unexpected',
+          reason: 'SAML response form is missing a SAMLResponse payload.',
+        };
+      }
       return {
-        kind: 'unexpected',
-        reason: 'SAML response form is missing its target action URL.',
+        kind: 'saml_post',
+        actionUrl,
+        fields,
       };
     }
-    const actionUrl = validateAllowedOriginUrl(
-      rawAction,
-      pageUrl,
-      new Set([moodleOrigin]),
-      'SAML callback',
-    );
-    const fields = collectFormInputs(form);
-    if (!fields.SAMLResponse) {
-      return {
-        kind: 'unexpected',
-        reason: 'SAML response form is missing a SAMLResponse payload.',
-      };
-    }
-    return {
-      kind: 'saml_post',
-      actionUrl,
-      fields,
-    };
   }
 
   // 2. Shibboleth IdP v5 pages (shibidp.cca.unipd.it)

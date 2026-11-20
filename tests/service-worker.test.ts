@@ -24,6 +24,7 @@ import {
   REDACTED_PLAYER_BRIDGE_HTML,
   REDACTED_RESOURCE_WRAPPER_HTML,
   REDACTED_SHIB_E1S1_INTERSTITIAL_HTML,
+  REDACTED_SHIB_E1S2_INVALID_LOGIN_HTML,
   REDACTED_SHIB_E1S2_LOGIN_HTML,
   REDACTED_SHIB_SAML_POST_HTML,
 } from './fixtures/moodle-fixtures.js';
@@ -1084,6 +1085,126 @@ describe('service-worker helpers', () => {
             blockedReason: null,
           },
         });
+      } finally {
+        (globalThis as { chrome?: unknown }).chrome = originalChrome;
+        (globalThis as { indexedDB?: unknown }).indexedDB = originalIndexedDb;
+        globalThis.fetch = originalFetch;
+      }
+    });
+
+    it('handles GET_SESSION_STATUS passive auto-login & SAVE_AUTH_CREDENTIALS invalid-login breaker safely', async () => {
+      const localStore: Record<string, unknown> = {};
+      const originalChrome = (globalThis as { chrome?: unknown }).chrome;
+      const originalIndexedDb = (globalThis as { indexedDB?: unknown }).indexedDB;
+      const originalFetch = globalThis.fetch;
+
+      (globalThis as { indexedDB: unknown }).indexedDB = createMockIndexedDb();
+      (globalThis as { chrome: unknown }).chrome = {
+        storage: {
+          local: {
+            get: vi.fn(async (key: string) => ({ [key]: localStore[key] })),
+            set: vi.fn(async (items: Record<string, unknown>) => {
+              Object.assign(localStore, items);
+            }),
+            remove: vi.fn(async (key: string) => {
+              delete localStore[key];
+            }),
+          },
+          session: {
+            get: vi.fn(async () => ({})),
+            set: vi.fn(async () => {}),
+          },
+        },
+        downloads: {
+          download: vi.fn(),
+          cancel: vi.fn(),
+          search: vi.fn(async () => []),
+        },
+        runtime: {
+          id: 'test-ext',
+          sendMessage: vi.fn(async () => undefined),
+        },
+      };
+
+      let rejectLogin = true;
+      let authenticated = false;
+      globalThis.fetch = vi.fn<typeof fetch>(async (input, init) => {
+        const url = String(input);
+        if (url.endsWith('/my/courses.php')) {
+          const res = new Response(
+            authenticated ? REDACTED_AUTHENTICATED_MY_COURSES_HTML : REDACTED_GUEST_MY_COURSES_HTML,
+            { status: 200, headers: { 'Content-Type': 'text/html' } },
+          );
+          Object.defineProperty(res, 'url', { value: url });
+          return res;
+        }
+        if (url.endsWith('/auth/shibboleth/index.php')) {
+          const res = new Response(REDACTED_SHIB_E1S2_LOGIN_HTML, {
+            status: 200,
+            headers: { 'Content-Type': 'text/html' },
+          });
+          Object.defineProperty(res, 'url', {
+            value: 'https://shibidp.cca.unipd.it/idp/profile/SAML2/Redirect/SSO?execution=e1s2',
+          });
+          return res;
+        }
+        if (url.includes('execution=e1s2') && init?.method === 'POST') {
+          const res = new Response(
+            rejectLogin ? REDACTED_SHIB_E1S2_INVALID_LOGIN_HTML : REDACTED_SHIB_SAML_POST_HTML,
+            { status: 200, headers: { 'Content-Type': 'text/html' } },
+          );
+          Object.defineProperty(res, 'url', {
+            value: 'https://shibidp.cca.unipd.it/idp/profile/SAML2/Redirect/SSO?execution=e1s3',
+          });
+          return res;
+        }
+        if (url.endsWith('/sp-shibboleth.sso/SAML2/POST') && init?.method === 'POST') {
+          authenticated = true;
+          const res = new Response(REDACTED_AUTHENTICATED_MY_COURSES_HTML, {
+            status: 200,
+            headers: { 'Content-Type': 'text/html' },
+          });
+          Object.defineProperty(res, 'url', { value: 'https://psico.elearning.unipd.it/' });
+          return res;
+        }
+        throw new Error(`Unexpected fetch URL: ${url}`);
+      });
+
+      try {
+        // Save with enabled=true when IdP rejects credentials -> saves vault AND records blockedReason
+        const badSave = await handleMessage({
+          type: 'SAVE_AUTH_CREDENTIALS',
+          username: 'student.test@studenti.unipd.it',
+          domain: '@studenti.unipd.it',
+          password: 'WrongPassword1',
+          enabled: true,
+        });
+        expect(badSave.ok && 'config' in badSave).toBe(true);
+        if (badSave.ok && 'config' in badSave) {
+          expect(badSave.config.blockedReason).toContain('Credenziali non valide');
+        }
+
+        // GET_SESSION_STATUS returns authenticated=false cleanly while blockedReason is set
+        const blockedStatus = await handleMessage({ type: 'GET_SESSION_STATUS' });
+        expect(blockedStatus).toEqual({
+          ok: true,
+          session: {
+            authenticated: false,
+            userId: null,
+            loginUrl: 'https://psico.elearning.unipd.it/auth/shibboleth/index.php',
+          },
+        });
+
+        // AUTO_LOGIN_NOW retries explicitly and succeeds once credentials are accepted
+        rejectLogin = false;
+        const forced = await handleMessage({ type: 'AUTO_LOGIN_NOW' });
+        expect(forced.ok && 'config' in forced && 'session' in forced && Boolean(forced.session)).toBe(true);
+        if (forced.ok && 'config' in forced && 'session' in forced && forced.session) {
+          expect(forced.session.authenticated).toBe(true);
+          expect(forced.config.blockedReason).toBeNull();
+        }
+
+        await handleMessage({ type: 'CLEAR_AUTH_CREDENTIALS' });
       } finally {
         (globalThis as { chrome?: unknown }).chrome = originalChrome;
         (globalThis as { indexedDB?: unknown }).indexedDB = originalIndexedDb;

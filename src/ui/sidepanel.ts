@@ -100,6 +100,7 @@ const state = {
     domain: '@studenti.unipd.it',
     blockedReason: null,
   } as StoredAuthConfig,
+  transientAuthError: null as string | null,
   authBusy: false,
   courses: [] as EnrolledCourse[],
   selectedAy: 'ALL',
@@ -235,14 +236,22 @@ function renderAuthBanner(): void {
   }
 }
 
+function resetSsoPasswordVisibility(): void {
+  dom.ssoPasswordInput.type = 'password';
+  dom.toggleSsoPasswordBtn.setAttribute('aria-pressed', 'false');
+  dom.toggleSsoPasswordBtn.textContent = 'Show';
+  dom.toggleSsoPasswordBtn.setAttribute('aria-label', 'Show password');
+}
+
 function renderAutoLoginConfig(): void {
   const cfg = state.authConfig;
+  const activeError = state.transientAuthError || cfg.blockedReason;
 
   dom.autoLoginStatusBadge.className = 'badge';
-  if (cfg.blockedReason) {
+  if (activeError) {
     dom.autoLoginStatusBadge.classList.add('badge-err');
-    dom.autoLoginStatusBadge.textContent = 'Action needed';
-    dom.autoLoginError.textContent = cfg.blockedReason;
+    dom.autoLoginStatusBadge.textContent = cfg.blockedReason ? 'Action needed' : 'Sign-in error';
+    dom.autoLoginError.textContent = activeError;
     dom.autoLoginError.hidden = false;
     dom.autoLoginDetails.open = true;
   } else {
@@ -2229,6 +2238,7 @@ function wireEvents(): void {
 
     void (async () => {
       state.authBusy = true;
+      state.transientAuthError = null;
       renderAutoLoginConfig();
       try {
         const res = await sendExtensionMessage({
@@ -2239,23 +2249,18 @@ function wireEvents(): void {
           enabled,
         });
         dom.ssoPasswordInput.value = '';
-        dom.ssoPasswordInput.type = 'password';
-        dom.toggleSsoPasswordBtn.setAttribute('aria-pressed', 'false');
-        dom.toggleSsoPasswordBtn.textContent = 'Show';
-        dom.toggleSsoPasswordBtn.setAttribute('aria-label', 'Show password');
+        resetSsoPasswordVisibility();
         state.authConfig = res.config;
         if (res.session) {
           state.session = res.session;
           renderAuthBanner();
         }
-        renderAutoLoginConfig();
         if (res.session?.authenticated) {
           await loadSessionAndCourses();
         }
       } catch (err) {
-        dom.autoLoginError.textContent =
+        state.transientAuthError =
           err instanceof Error ? err.message : 'Failed to save credentials.';
-        dom.autoLoginError.hidden = false;
       } finally {
         state.authBusy = false;
         renderAutoLoginConfig();
@@ -2270,6 +2275,7 @@ function wireEvents(): void {
     const enabled = dom.autoLoginEnabledToggle.checked;
     void (async () => {
       state.authBusy = true;
+      state.transientAuthError = null;
       renderAutoLoginConfig();
       try {
         const res = await sendExtensionMessage({
@@ -2281,14 +2287,13 @@ function wireEvents(): void {
           state.session = res.session;
           renderAuthBanner();
         }
-        renderAutoLoginConfig();
         if (res.session?.authenticated && state.courses.length === 0) {
           await loadSessionAndCourses();
         }
       } catch (err) {
-        dom.autoLoginError.textContent =
+        dom.autoLoginEnabledToggle.checked = state.authConfig.enabled;
+        state.transientAuthError =
           err instanceof Error ? err.message : 'Failed to update auto-login setting.';
-        dom.autoLoginError.hidden = false;
       } finally {
         state.authBusy = false;
         renderAutoLoginConfig();
@@ -2302,21 +2307,20 @@ function wireEvents(): void {
     }
     void (async () => {
       state.authBusy = true;
+      state.transientAuthError = null;
       renderAutoLoginConfig();
       try {
         const res = await sendExtensionMessage({ type: 'AUTO_LOGIN_NOW' });
         state.authConfig = res.config;
         state.session = res.session;
         renderAuthBanner();
-        renderAutoLoginConfig();
         if (res.session.authenticated) {
           await loadSessionAndCourses();
         }
       } catch (err) {
         await refreshAuthConfig();
-        dom.autoLoginError.textContent =
+        state.transientAuthError =
           err instanceof Error ? err.message : 'Automatic UniPD SSO login failed.';
-        dom.autoLoginError.hidden = false;
       } finally {
         state.authBusy = false;
         renderAutoLoginConfig();
@@ -2330,19 +2334,19 @@ function wireEvents(): void {
     }
     void (async () => {
       state.authBusy = true;
+      state.transientAuthError = null;
       renderAutoLoginConfig();
       try {
         const res = await sendExtensionMessage({ type: 'CLEAR_AUTH_CREDENTIALS' });
         state.authConfig = res.config;
         dom.ssoUsernameInput.value = '';
         dom.ssoPasswordInput.value = '';
+        resetSsoPasswordVisibility();
         dom.ssoDomainSelect.value = '@studenti.unipd.it';
         dom.autoLoginEnabledToggle.checked = true;
-        renderAutoLoginConfig();
       } catch (err) {
-        dom.autoLoginError.textContent =
+        state.transientAuthError =
           err instanceof Error ? err.message : 'Failed to clear saved credentials.';
-        dom.autoLoginError.hidden = false;
       } finally {
         state.authBusy = false;
         renderAutoLoginConfig();
@@ -2526,8 +2530,14 @@ function wireEvents(): void {
       applyDownloadHistory(event.entries);
     } else if (event.type === 'AUTH_CONFIG_UPDATED') {
       state.authConfig = event.config;
+      if (event.config.blockedReason === null && !state.authBusy) {
+        state.transientAuthError = null;
+      }
       renderAutoLoginConfig();
     } else if (event.type === 'SESSION_UPDATED') {
+      if (event.session.authenticated) {
+        state.transientAuthError = null;
+      }
       if (state.sessionLoadPromise) {
         if (event.session.authenticated) {
           state.pendingSessionReload = true;

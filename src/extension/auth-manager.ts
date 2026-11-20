@@ -219,7 +219,12 @@ export class AuthManager {
   private readonly onSessionUpdated?: (session: MoodleSessionInfo) => void | Promise<void>;
   private readonly onAuthConfigUpdated?: (config: StoredAuthConfig) => void | Promise<void>;
 
-  private inFlightAuth: Promise<MoodleSessionInfo> | null = null;
+  private inFlightAuth: {
+    promise: Promise<MoodleSessionInfo>;
+    epoch: number;
+    forceAutoLogin: boolean;
+  } | null = null;
+  private authEpoch = 0;
   private mutationChain: Promise<unknown> = Promise.resolve();
 
   constructor(options: AuthManagerOptions = {}) {
@@ -297,6 +302,8 @@ export class AuthManager {
         domain: normalized.domain,
         blockedReason: null,
       });
+      this.authEpoch += 1;
+      this.inFlightAuth = null;
       return this.emitConfigUpdated();
     });
   }
@@ -316,12 +323,17 @@ export class AuthManager {
     return this.runSerialized(async () => {
       await clearCredentialsFromVault(this.keyStore, this.cipherStorage);
       await this.metaStorage.deleteMeta();
+      this.authEpoch += 1;
+      this.inFlightAuth = null;
       return this.emitConfigUpdated();
     });
   }
 
-  private async recordBlockedReason(reason: string | null): Promise<void> {
+  private async recordBlockedReason(reason: string | null, expectedEpoch: number): Promise<void> {
     await this.runSerialized(async () => {
+      if (this.authEpoch !== expectedEpoch) {
+        return;
+      }
       const current = (await this.metaStorage.getMeta()) ?? { ...DEFAULT_META_RECORD };
       await this.metaStorage.setMeta({
         ...current,
@@ -341,9 +353,15 @@ export class AuthManager {
     const allowAutoLogin = options.allowAutoLogin ?? true;
     const forceAutoLogin = options.forceAutoLogin ?? false;
 
-    if (this.inFlightAuth) {
-      return this.inFlightAuth;
+    const currentInFlight = this.inFlightAuth;
+    if (currentInFlight && currentInFlight.epoch === this.authEpoch) {
+      if (!forceAutoLogin || currentInFlight.forceAutoLogin) {
+        return currentInFlight.promise;
+      }
+      await currentInFlight.promise.catch(() => undefined);
     }
+
+    const startEpoch = this.authEpoch;
 
     const run = (async (): Promise<MoodleSessionInfo> => {
       const fetchImpl = this.resolveFetchImpl();
@@ -352,24 +370,23 @@ export class AuthManager {
         return existing;
       }
 
-      if (!allowAutoLogin) {
+      if (!allowAutoLogin || startEpoch !== this.authEpoch) {
         return existing;
       }
 
-      const config = await this.getAuthConfig();
-      if (!config.configured) {
-        return existing;
-      }
-      if (!forceAutoLogin && (!config.enabled || config.blockedReason)) {
-        return existing;
-      }
-
-      const loaded = await loadCredentialsFromVault(this.keyStore, this.cipherStorage);
-      if (loaded.status === 'empty') {
-        return existing;
-      }
-      if (loaded.status === 'corrupted') {
-        await this.runSerialized(async () => {
+      const snapshot = await this.runSerialized(async () => {
+        if (startEpoch !== this.authEpoch) {
+          return null;
+        }
+        const config = await this.getAuthConfig();
+        if (!config.configured) {
+          return { config, loaded: { status: 'empty' as const } };
+        }
+        if (!forceAutoLogin && (!config.enabled || config.blockedReason)) {
+          return { config, loaded: null };
+        }
+        const loaded = await loadCredentialsFromVault(this.keyStore, this.cipherStorage);
+        if (loaded.status === 'corrupted') {
           await clearCredentialsFromVault(this.keyStore, this.cipherStorage);
           await this.metaStorage.setMeta({
             enabled: false,
@@ -378,7 +395,17 @@ export class AuthManager {
             blockedReason: 'Saved credentials could not be unlocked; please re-enter them.',
           });
           await this.emitConfigUpdated();
-        });
+        }
+        return { config, loaded };
+      });
+
+      if (!snapshot || !snapshot.loaded) {
+        return existing;
+      }
+      if (snapshot.loaded.status === 'empty') {
+        return existing;
+      }
+      if (snapshot.loaded.status === 'corrupted') {
         if (forceAutoLogin) {
           throw new Error('Saved credentials could not be unlocked; please re-enter them.');
         }
@@ -387,29 +414,38 @@ export class AuthManager {
 
       try {
         const session = await executeHeadlessShibbolethLogin({
-          credentials: loaded.credentials,
+          credentials: snapshot.loaded.credentials,
           moodleBaseUrl: this.moodleBaseUrl,
           fetchImpl,
         });
 
-        if (config.blockedReason) {
-          await this.recordBlockedReason(null);
+        if (startEpoch !== this.authEpoch) {
+          return session;
+        }
+
+        if (snapshot.config.blockedReason) {
+          await this.recordBlockedReason(null, startEpoch);
         }
         await this.onSessionUpdated?.(session);
         return session;
       } catch (err) {
-        if (err instanceof ShibbolethAuthError && err.tripCircuitBreaker) {
-          await this.recordBlockedReason(sanitizeErrorMessage(err.message));
+        if (
+          startEpoch === this.authEpoch &&
+          err instanceof ShibbolethAuthError &&
+          err.tripCircuitBreaker
+        ) {
+          await this.recordBlockedReason(sanitizeErrorMessage(err.message), startEpoch);
         }
         throw err;
       }
     })();
 
-    this.inFlightAuth = run;
+    const entry = { promise: run, epoch: startEpoch, forceAutoLogin };
+    this.inFlightAuth = entry;
     try {
       return await run;
     } finally {
-      if (this.inFlightAuth === run) {
+      if (this.inFlightAuth === entry) {
         this.inFlightAuth = null;
       }
     }
