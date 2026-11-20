@@ -83,6 +83,7 @@ interface InternalDownloadEntry {
   item: DownloadQueueItem;
   descriptor: DownloadResolutionDescriptor | null;
   cancelRequested: boolean;
+  attemptId: number;
 }
 
 /**
@@ -369,7 +370,7 @@ export class DownloadManager {
         item.canRetry = false;
       }
 
-      this.entries.push({ item, descriptor, cancelRequested: false });
+      this.entries.push({ item, descriptor, cancelRequested: false, attemptId: 0 });
       if (item.downloadId !== null) {
         this.downloadIdToTaskId.set(item.downloadId, item.id);
       }
@@ -451,6 +452,7 @@ export class DownloadManager {
         item,
         descriptor: cloneDescriptor(req.descriptor),
         cancelRequested: false,
+        attemptId: 0,
       });
       createdIds.push(id);
     }
@@ -516,6 +518,7 @@ export class DownloadManager {
     }
 
     if (entry.item.status === 'queued') {
+      entry.attemptId += 1;
       entry.cancelRequested = true;
       entry.item.status = 'cancelled';
       entry.item.error = CANCELLED_BY_USER_MESSAGE;
@@ -525,6 +528,7 @@ export class DownloadManager {
     }
 
     if (entry.item.status === 'in_progress') {
+      entry.attemptId += 1;
       entry.cancelRequested = true;
       const existingDownloadId = entry.item.downloadId;
       entry.item.status = 'cancelled';
@@ -582,6 +586,7 @@ export class DownloadManager {
       entry.item.downloadId = null;
     }
 
+    entry.attemptId += 1;
     entry.cancelRequested = false;
     entry.item.status = 'queued';
     entry.item.bytesReceived = 0;
@@ -633,8 +638,15 @@ export class DownloadManager {
     }
   }
 
-  private isEntryCancelled(entry: InternalDownloadEntry): boolean {
-    return entry.cancelRequested || entry.item.status === 'cancelled';
+  private isStaleOrCancelledAttempt(
+    entry: InternalDownloadEntry,
+    attemptId: number,
+  ): boolean {
+    return (
+      entry.attemptId !== attemptId ||
+      entry.cancelRequested ||
+      entry.item.status === 'cancelled'
+    );
   }
 
   private async drainAvailableSlots(): Promise<void> {
@@ -660,18 +672,19 @@ export class DownloadManager {
 
       // Transition synchronously before awaiting lazy URL resolution and
       // `chrome.downloads.download()` so concurrent callers never exceed `maxConcurrent`.
+      const attemptId = ++nextEntry.attemptId;
       nextEntry.item.status = 'in_progress';
       nextEntry.item.error = null;
       nextEntry.item.canRetry = false;
       nextEntry.cancelRequested = false;
       await this.emitAndPersist();
-      if (this.isEntryCancelled(nextEntry)) {
+      if (this.isStaleOrCancelledAttempt(nextEntry, attemptId)) {
         continue;
       }
 
       try {
         const resolved = await this.resolveDownloadUrl(descriptor);
-        if (this.isEntryCancelled(nextEntry)) {
+        if (this.isStaleOrCancelledAttempt(nextEntry, attemptId)) {
           continue;
         }
 
@@ -697,7 +710,7 @@ export class DownloadManager {
           saveAs: false,
         });
 
-        if (this.isEntryCancelled(nextEntry)) {
+        if (this.isStaleOrCancelledAttempt(nextEntry, attemptId)) {
           try {
             await this.api.cancel(downloadId);
           } catch {
@@ -711,9 +724,12 @@ export class DownloadManager {
         // Immediately sync in case a fast download (e.g. small .vtt) already finished
         // before `chrome.downloads.download()` resolved and before `downloadIdToTaskId` was set.
         await this.syncSingleDownloadBytes(nextEntry);
+        if (this.isStaleOrCancelledAttempt(nextEntry, attemptId)) {
+          continue;
+        }
         await this.emitAndPersist();
       } catch (err) {
-        if (this.isEntryCancelled(nextEntry)) {
+        if (this.isStaleOrCancelledAttempt(nextEntry, attemptId)) {
           continue;
         }
         nextEntry.item.status = 'failed';
@@ -774,8 +790,13 @@ export class DownloadManager {
     if (item.downloadId === null) {
       return false;
     }
+    const trackedDownloadId = item.downloadId;
+    const trackedAttemptId = entry.attemptId;
     try {
-      const results = await this.api.search({ id: item.downloadId });
+      const results = await this.api.search({ id: trackedDownloadId });
+      if (item.downloadId !== trackedDownloadId || entry.attemptId !== trackedAttemptId) {
+        return false;
+      }
       const info = results[0];
       if (!info) {
         if (item.status === 'in_progress') {
