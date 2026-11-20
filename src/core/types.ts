@@ -90,6 +90,7 @@ export interface ResolvedLectureMedia {
   flavors: VideoFlavor[];
   captions: CaptionTrack[];
   directMp4Url: string | null;
+  hlsOnly: boolean;
 }
 
 export interface LectureDownloadPathParams {
@@ -151,4 +152,24 @@ export interface MaterialDownloadPathParams {
   subPath?: string[];
   fileName?: string | null;
   ext: string;
+}
+
+export type QualityPreference = 'highest' | '1080p' | '720p' | '360p';
+
+export type ActiveContentTab = 'videos' | 'materials';
+
+export interface UserPreferences {
+  defaultQuality: QualityPreference;
+  includeVtt: boolean;
+  activeContentTab: ActiveContentTab;
+  skipDownloaded: boolean;
+}
+
+/**
+ * Secret-free download completion record persisted in bounded LRU order
+ * in extension local storage (`courseId:cmid:kind:variant`).
+ */
+export interface DownloadHistoryEntry {
+  key: string;
+  completedAt: number;
 }

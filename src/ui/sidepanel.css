@@ -264,6 +264,11 @@ h2 {
   border-color: var(--err);
 }
 
+.badge-warn {
+  color: var(--warn);
+  border-color: var(--warn);
+}
+
 .filter-row {
   display: flex;
   gap: 8px;
@@ -631,6 +636,14 @@ input[type='checkbox']:focus-visible {
   color: var(--text-muted);
 }
 
+.content-options-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 0;
+}
+
 .action-bar {
   display: flex;
   align-items: center;
@@ -688,6 +701,12 @@ input[type='checkbox']:focus-visible {
   gap: 8px;
   font-size: 11px;
   color: var(--text-muted);
+}
+
+.queue-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .queue-error {

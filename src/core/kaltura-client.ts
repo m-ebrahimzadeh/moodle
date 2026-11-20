@@ -313,17 +313,27 @@ export function parseKalturaMultirequestResponse(
   }
 
   let directMp4Url: string | null = flavors[0]?.downloadUrl ?? null;
-  if (!directMp4Url && Array.isArray(playbackContext.sources)) {
+  let hasAppleHttpSource = false;
+  if (Array.isArray(playbackContext.sources)) {
     for (const source of playbackContext.sources) {
-      if (source.format === 'url' && typeof source.url === 'string' && source.url.length > 0) {
-        const normalized = normalizeHttpsUrl(source.url);
-        if (normalized) {
-          directMp4Url = normalized;
-          break;
-        }
+      const fmt = typeof source.format === 'string' ? source.format.trim().toLowerCase() : '';
+      const rawSourceUrl = typeof source.url === 'string' ? source.url : '';
+      const normalizedSourceUrl = rawSourceUrl.length > 0 ? normalizeHttpsUrl(rawSourceUrl) : null;
+
+      if (!directMp4Url && fmt === 'url' && normalizedSourceUrl) {
+        directMp4Url = normalizedSourceUrl;
+      }
+
+      if (
+        normalizedSourceUrl &&
+        (fmt === 'applehttp' || fmt === 'hls' || /\.m3u8(?:[?#]|$)/i.test(normalizedSourceUrl))
+      ) {
+        hasAppleHttpSource = true;
       }
     }
   }
+
+  const hlsOnly = flavors.length === 0 && !directMp4Url && hasAppleHttpSource;
 
   return {
     entryId,
@@ -332,6 +342,7 @@ export function parseKalturaMultirequestResponse(
     flavors,
     captions,
     directMp4Url,
+    hlsOnly,
   };
 }
 

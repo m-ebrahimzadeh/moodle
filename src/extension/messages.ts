@@ -2,6 +2,7 @@ import type {
   CourseMaterialActivity,
   CourseMaterialSection,
   CourseSection,
+  DownloadHistoryEntry,
   EnrolledCourse,
   LectureActivity,
 } from '../core/types.js';
@@ -47,6 +48,7 @@ export interface PublicResolvedLectureMedia {
   flavors: PublicVideoFlavor[];
   captions: PublicCaptionTrack[];
   hasDirectMp4: boolean;
+  hlsOnly: boolean;
 }
 
 export type DownloadKind = 'video' | 'subtitle' | 'material';
@@ -121,6 +123,7 @@ export interface DownloadQueueItem {
   totalBytes: number;
   error: string | null;
   createdAt: number;
+  canRetry?: boolean;
 }
 
 export interface DownloadQueueState {
@@ -140,7 +143,9 @@ export type ExtensionRequest =
   | { type: 'ENQUEUE_DOWNLOADS'; items: EnqueueDownloadItem[] }
   | { type: 'GET_QUEUE_STATE' }
   | { type: 'CANCEL_DOWNLOAD'; taskId: string }
-  | { type: 'CLEAR_FINISHED_DOWNLOADS' };
+  | { type: 'RETRY_DOWNLOAD'; taskId: string }
+  | { type: 'CLEAR_FINISHED_DOWNLOADS' }
+  | { type: 'GET_DOWNLOAD_HISTORY' };
 
 export type ExtensionResponseMap = {
   GET_SESSION_STATUS: { session: PublicSessionStatus };
@@ -156,7 +161,9 @@ export type ExtensionResponseMap = {
   ENQUEUE_DOWNLOADS: { enqueuedIds: string[]; state: DownloadQueueState };
   GET_QUEUE_STATE: { state: DownloadQueueState };
   CANCEL_DOWNLOAD: { state: DownloadQueueState };
+  RETRY_DOWNLOAD: { state: DownloadQueueState };
   CLEAR_FINISHED_DOWNLOADS: { state: DownloadQueueState };
+  GET_DOWNLOAD_HISTORY: { entries: DownloadHistoryEntry[] };
 };
 
 export type ExtensionResponse<T extends ExtensionRequest['type']> =
@@ -165,4 +172,5 @@ export type ExtensionResponse<T extends ExtensionRequest['type']> =
 
 export type ExtensionBroadcastEvent =
   | { type: 'QUEUE_UPDATED'; state: DownloadQueueState }
-  | { type: 'SESSION_UPDATED'; session: PublicSessionStatus };
+  | { type: 'SESSION_UPDATED'; session: PublicSessionStatus }
+  | { type: 'DOWNLOAD_HISTORY_UPDATED'; entries: DownloadHistoryEntry[] };
