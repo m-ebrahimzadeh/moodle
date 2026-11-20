@@ -173,3 +173,23 @@ export interface DownloadHistoryEntry {
   key: string;
   completedAt: number;
 }
+
+export type UnipdDomain = '@studenti.unipd.it' | '@unipd.it';
+
+export interface ShibbolethCredentials {
+  username: string;
+  domain: UnipdDomain;
+  password: string;
+}
+
+/**
+ * Secret-free authentication settings and circuit-breaker state safe for UI display
+ * and extension local metadata storage. Never contains a password.
+ */
+export interface StoredAuthConfig {
+  configured: boolean;
+  enabled: boolean;
+  username: string | null;
+  domain: UnipdDomain;
+  blockedReason: string | null;
+}

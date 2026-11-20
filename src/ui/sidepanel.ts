@@ -18,6 +18,8 @@ import {
   type EnrolledCourse,
   type LectureActivity,
   type QualityPreference,
+  type StoredAuthConfig,
+  type UnipdDomain,
   type UserPreferences,
 } from '../core/index.js';
 import type {
@@ -91,6 +93,15 @@ interface QueueCardDomRefs {
 
 const state = {
   session: null as PublicSessionStatus | null,
+  authConfig: {
+    configured: false,
+    enabled: false,
+    username: null,
+    domain: '@studenti.unipd.it',
+    blockedReason: null,
+  } as StoredAuthConfig,
+  transientAuthError: null as string | null,
+  authBusy: false,
   courses: [] as EnrolledCourse[],
   selectedAy: 'ALL',
   searchQuery: '',
@@ -139,6 +150,19 @@ const dom = {
   authMessage: requireElement<HTMLSpanElement>('auth-message'),
   ssoLoginBtn: requireElement<HTMLButtonElement>('sso-login-btn'),
   globalAlert: requireElement<HTMLDivElement>('global-alert'),
+  autoLoginDetails: requireElement<HTMLDetailsElement>('auto-login-details'),
+  autoLoginStatusBadge: requireElement<HTMLSpanElement>('auto-login-status-badge'),
+  autoLoginForm: requireElement<HTMLFormElement>('auto-login-form'),
+  autoLoginNote: requireElement<HTMLParagraphElement>('auto-login-note'),
+  autoLoginError: requireElement<HTMLDivElement>('auto-login-error'),
+  ssoUsernameInput: requireElement<HTMLInputElement>('sso-username-input'),
+  ssoDomainSelect: requireElement<HTMLSelectElement>('sso-domain-select'),
+  ssoPasswordInput: requireElement<HTMLInputElement>('sso-password-input'),
+  toggleSsoPasswordBtn: requireElement<HTMLButtonElement>('toggle-sso-password-btn'),
+  autoLoginEnabledToggle: requireElement<HTMLInputElement>('auto-login-enabled-toggle'),
+  saveCredentialsBtn: requireElement<HTMLButtonElement>('save-credentials-btn'),
+  autoLoginNowBtn: requireElement<HTMLButtonElement>('auto-login-now-btn'),
+  clearCredentialsBtn: requireElement<HTMLButtonElement>('clear-credentials-btn'),
   courseCountBadge: requireElement<HTMLSpanElement>('course-count-badge'),
   ayFilter: requireElement<HTMLSelectElement>('ay-filter'),
   courseSearch: requireElement<HTMLInputElement>('course-search'),
@@ -209,6 +233,77 @@ function renderAuthBanner(): void {
     dom.authBanner.classList.add('auth-required');
     dom.authMessage.textContent = 'Sign in required for psico.elearning.unipd.it';
     dom.ssoLoginBtn.hidden = false;
+  }
+}
+
+function resetSsoPasswordVisibility(): void {
+  dom.ssoPasswordInput.type = 'password';
+  dom.toggleSsoPasswordBtn.setAttribute('aria-pressed', 'false');
+  dom.toggleSsoPasswordBtn.textContent = 'Show';
+  dom.toggleSsoPasswordBtn.setAttribute('aria-label', 'Show password');
+}
+
+function renderAutoLoginConfig(): void {
+  const cfg = state.authConfig;
+  const activeError = state.transientAuthError || cfg.blockedReason;
+
+  dom.autoLoginStatusBadge.className = 'badge';
+  if (activeError) {
+    dom.autoLoginStatusBadge.classList.add('badge-err');
+    dom.autoLoginStatusBadge.textContent = cfg.blockedReason ? 'Action needed' : 'Sign-in error';
+    dom.autoLoginError.textContent = activeError;
+    dom.autoLoginError.hidden = false;
+    dom.autoLoginDetails.open = true;
+  } else {
+    dom.autoLoginError.textContent = '';
+    dom.autoLoginError.hidden = true;
+    if (!cfg.configured) {
+      dom.autoLoginStatusBadge.textContent = 'Off';
+    } else if (cfg.enabled) {
+      dom.autoLoginStatusBadge.classList.add('badge-ok');
+      dom.autoLoginStatusBadge.textContent = 'Active';
+    } else {
+      dom.autoLoginStatusBadge.classList.add('badge-warn');
+      dom.autoLoginStatusBadge.textContent = 'Paused';
+    }
+  }
+
+  if (cfg.configured) {
+    dom.autoLoginNote.textContent = cfg.username
+      ? `Saved encrypted locally for ${cfg.username}.`
+      : 'Credentials saved encrypted locally.';
+    if (document.activeElement !== dom.ssoUsernameInput && cfg.username && !dom.ssoUsernameInput.value) {
+      dom.ssoUsernameInput.value = cfg.username;
+    }
+    if (document.activeElement !== dom.ssoDomainSelect) {
+      dom.ssoDomainSelect.value = cfg.domain;
+    }
+    if (document.activeElement !== dom.autoLoginEnabledToggle) {
+      dom.autoLoginEnabledToggle.checked = cfg.enabled;
+    }
+  } else {
+    dom.autoLoginNote.textContent = 'Credentials stay encrypted locally in this browser profile.';
+  }
+
+  dom.clearCredentialsBtn.hidden = !cfg.configured;
+  dom.autoLoginNowBtn.hidden = !cfg.configured || Boolean(state.session?.authenticated);
+  dom.saveCredentialsBtn.disabled = state.authBusy;
+  dom.saveCredentialsBtn.textContent = state.authBusy
+    ? 'Saving…'
+    : cfg.configured
+      ? 'Update Credentials'
+      : 'Save Credentials';
+  dom.autoLoginNowBtn.disabled = state.authBusy;
+  dom.clearCredentialsBtn.disabled = state.authBusy;
+}
+
+async function refreshAuthConfig(): Promise<void> {
+  try {
+    const res = await sendExtensionMessage({ type: 'GET_AUTH_CONFIG' });
+    state.authConfig = res.config;
+    renderAutoLoginConfig();
+  } catch {
+    // Non-fatal if background auth config read fails
   }
 }
 
@@ -2051,6 +2146,7 @@ function loadSessionAndCourses(): Promise<void> {
       const sessionRes = await sendExtensionMessage({ type: 'GET_SESSION_STATUS' });
       state.session = sessionRes.session;
       renderAuthBanner();
+      renderAutoLoginConfig();
 
       if (sessionRes.session.authenticated) {
         const coursesRes = await sendExtensionMessage({ type: 'LIST_COURSES' });
@@ -2105,6 +2201,155 @@ function wireEvents(): void {
         await sendExtensionMessage({ type: 'OPEN_SSO_LOGIN' });
       } catch (err) {
         showAlert(err instanceof Error ? err.message : 'Could not open UniPD SSO login tab.');
+      }
+    })();
+  });
+
+  dom.toggleSsoPasswordBtn.addEventListener('click', () => {
+    const showing = dom.ssoPasswordInput.type === 'text';
+    dom.ssoPasswordInput.type = showing ? 'password' : 'text';
+    dom.toggleSsoPasswordBtn.setAttribute('aria-pressed', String(!showing));
+    dom.toggleSsoPasswordBtn.textContent = showing ? 'Show' : 'Hide';
+    dom.toggleSsoPasswordBtn.setAttribute(
+      'aria-label',
+      showing ? 'Show password' : 'Hide password',
+    );
+  });
+
+  dom.autoLoginForm.addEventListener('submit', (event) => {
+    event.preventDefault();
+    if (state.authBusy) {
+      return;
+    }
+
+    const username = dom.ssoUsernameInput.value.trim();
+    const password = dom.ssoPasswordInput.value;
+    const domain = dom.ssoDomainSelect.value as UnipdDomain;
+    const enabled = dom.autoLoginEnabledToggle.checked;
+
+    if (!username) {
+      dom.ssoUsernameInput.focus();
+      return;
+    }
+    if (!password) {
+      dom.ssoPasswordInput.focus();
+      return;
+    }
+
+    void (async () => {
+      state.authBusy = true;
+      state.transientAuthError = null;
+      renderAutoLoginConfig();
+      try {
+        const res = await sendExtensionMessage({
+          type: 'SAVE_AUTH_CREDENTIALS',
+          username,
+          domain,
+          password,
+          enabled,
+        });
+        dom.ssoPasswordInput.value = '';
+        resetSsoPasswordVisibility();
+        state.authConfig = res.config;
+        if (res.session) {
+          state.session = res.session;
+          renderAuthBanner();
+        }
+        if (res.session?.authenticated) {
+          await loadSessionAndCourses();
+        }
+      } catch (err) {
+        state.transientAuthError =
+          err instanceof Error ? err.message : 'Failed to save credentials.';
+      } finally {
+        state.authBusy = false;
+        renderAutoLoginConfig();
+      }
+    })();
+  });
+
+  dom.autoLoginEnabledToggle.addEventListener('change', () => {
+    if (!state.authConfig.configured || state.authBusy) {
+      return;
+    }
+    const enabled = dom.autoLoginEnabledToggle.checked;
+    void (async () => {
+      state.authBusy = true;
+      state.transientAuthError = null;
+      renderAutoLoginConfig();
+      try {
+        const res = await sendExtensionMessage({
+          type: 'SET_AUTO_LOGIN_ENABLED',
+          enabled,
+        });
+        state.authConfig = res.config;
+        if (res.session) {
+          state.session = res.session;
+          renderAuthBanner();
+        }
+        if (res.session?.authenticated && state.courses.length === 0) {
+          await loadSessionAndCourses();
+        }
+      } catch (err) {
+        dom.autoLoginEnabledToggle.checked = state.authConfig.enabled;
+        state.transientAuthError =
+          err instanceof Error ? err.message : 'Failed to update auto-login setting.';
+      } finally {
+        state.authBusy = false;
+        renderAutoLoginConfig();
+      }
+    })();
+  });
+
+  dom.autoLoginNowBtn.addEventListener('click', () => {
+    if (state.authBusy) {
+      return;
+    }
+    void (async () => {
+      state.authBusy = true;
+      state.transientAuthError = null;
+      renderAutoLoginConfig();
+      try {
+        const res = await sendExtensionMessage({ type: 'AUTO_LOGIN_NOW' });
+        state.authConfig = res.config;
+        state.session = res.session;
+        renderAuthBanner();
+        if (res.session.authenticated) {
+          await loadSessionAndCourses();
+        }
+      } catch (err) {
+        await refreshAuthConfig();
+        state.transientAuthError =
+          err instanceof Error ? err.message : 'Automatic UniPD SSO login failed.';
+      } finally {
+        state.authBusy = false;
+        renderAutoLoginConfig();
+      }
+    })();
+  });
+
+  dom.clearCredentialsBtn.addEventListener('click', () => {
+    if (state.authBusy) {
+      return;
+    }
+    void (async () => {
+      state.authBusy = true;
+      state.transientAuthError = null;
+      renderAutoLoginConfig();
+      try {
+        const res = await sendExtensionMessage({ type: 'CLEAR_AUTH_CREDENTIALS' });
+        state.authConfig = res.config;
+        dom.ssoUsernameInput.value = '';
+        dom.ssoPasswordInput.value = '';
+        resetSsoPasswordVisibility();
+        dom.ssoDomainSelect.value = '@studenti.unipd.it';
+        dom.autoLoginEnabledToggle.checked = true;
+      } catch (err) {
+        state.transientAuthError =
+          err instanceof Error ? err.message : 'Failed to clear saved credentials.';
+      } finally {
+        state.authBusy = false;
+        renderAutoLoginConfig();
       }
     })();
   });
@@ -2283,7 +2528,16 @@ function wireEvents(): void {
       renderQueue();
     } else if (event.type === 'DOWNLOAD_HISTORY_UPDATED') {
       applyDownloadHistory(event.entries);
+    } else if (event.type === 'AUTH_CONFIG_UPDATED') {
+      state.authConfig = event.config;
+      if (event.config.blockedReason === null && !state.authBusy) {
+        state.transientAuthError = null;
+      }
+      renderAutoLoginConfig();
     } else if (event.type === 'SESSION_UPDATED') {
+      if (event.session.authenticated) {
+        state.transientAuthError = null;
+      }
       if (state.sessionLoadPromise) {
         if (event.session.authenticated) {
           state.pendingSessionReload = true;
@@ -2293,6 +2547,7 @@ function wireEvents(): void {
       const wasAuth = state.session?.authenticated ?? false;
       state.session = event.session;
       renderAuthBanner();
+      renderAutoLoginConfig();
       if (!wasAuth && event.session.authenticated) {
         void loadSessionAndCourses();
       }
@@ -2304,6 +2559,7 @@ async function init(): Promise<void> {
   await loadPreferences();
   wireEvents();
   await Promise.all([
+    refreshAuthConfig(),
     loadSessionAndCourses(),
     refreshQueueState(),
     refreshDownloadHistory(),

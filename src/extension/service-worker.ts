@@ -2,6 +2,8 @@ import {
   DEFAULT_MOODLE_BASE_URL,
   DOWNLOAD_HISTORY_STORAGE_KEY,
   MAX_DOWNLOAD_HISTORY_ENTRIES,
+  MoodleSessionExpiredError,
+  ShibbolethAuthError,
   UNIPD_SHIBBOLETH_LOGIN_PATH,
   buildDownloadHistoryKey,
   buildFolderFileHistoryVariant,
@@ -28,6 +30,7 @@ import {
   type ResolvedLectureMedia,
   type VideoFlavor,
 } from '../core/index.js';
+import { AuthManager } from './auth-manager.js';
 import {
   ALLOWED_MEDIA_ORIGINS,
   DEFAULT_MAX_CONCURRENT_DOWNLOADS,
@@ -363,7 +366,9 @@ export async function resolveMoodleHostedMp4(
   const finalUrl = response.url || activity.url;
   if (isLoginPageUrl(finalUrl)) {
     controller.abort();
-    throw new Error('Moodle session expired. Please sign in with UniPD SSO again.');
+    throw new MoodleSessionExpiredError(
+      'Moodle session expired. Please sign in with UniPD SSO again.',
+    );
   }
 
   const contentType = (response.headers.get('content-type') ?? '').toLowerCase();
@@ -399,7 +404,9 @@ export async function resolveMoodleHostedMp4(
     }
     const html = await response.text();
     if (isUnauthenticatedMoodleHtml(html, finalUrl)) {
-      throw new Error('Moodle session expired. Please sign in with UniPD SSO again.');
+      throw new MoodleSessionExpiredError(
+        'Moodle session expired. Please sign in with UniPD SSO again.',
+      );
     }
     const extracted = extractPluginfileMp4Url(html, DEFAULT_MOODLE_BASE_URL);
     if (extracted) {
@@ -483,7 +490,9 @@ export async function resolveActivityMedia(
     const finalUrl = response.url || bridgeUrl;
     if (isLoginPageUrl(finalUrl)) {
       controller.abort();
-      throw new Error('Moodle session expired. Please sign in with UniPD SSO again.');
+      throw new MoodleSessionExpiredError(
+        'Moodle session expired. Please sign in with UniPD SSO again.',
+      );
     }
 
     if (!isSameOrigin(finalUrl, MOODLE_ORIGIN)) {
@@ -501,7 +510,9 @@ export async function resolveActivityMedia(
 
     const bridgeHtml = await response.text();
     if (isUnauthenticatedMoodleHtml(bridgeHtml, finalUrl)) {
-      throw new Error('Moodle session expired. Please sign in with UniPD SSO again.');
+      throw new MoodleSessionExpiredError(
+        'Moodle session expired. Please sign in with UniPD SSO again.',
+      );
     }
 
     const resolved = await resolveKalturaLectureMedia(bridgeHtml, fetchImpl);
@@ -643,7 +654,9 @@ export async function resolveMoodleResourceDownload(
   const finalUrl = response.url || material.url;
   if (isLoginPageUrl(finalUrl)) {
     controller.abort();
-    throw new Error('Moodle session expired. Please sign in with UniPD SSO again.');
+    throw new MoodleSessionExpiredError(
+      'Moodle session expired. Please sign in with UniPD SSO again.',
+    );
   }
 
   if (!isSameOrigin(finalUrl, MOODLE_ORIGIN)) {
@@ -685,7 +698,9 @@ export async function resolveMoodleResourceDownload(
 
   const html = await response.text();
   if (isUnauthenticatedMoodleHtml(html, finalUrl)) {
-    throw new Error('Moodle session expired. Please sign in with UniPD SSO again.');
+    throw new MoodleSessionExpiredError(
+      'Moodle session expired. Please sign in with UniPD SSO again.',
+    );
   }
 
   const extracted = extractPluginfileResourceUrl(html, DEFAULT_MOODLE_BASE_URL);
@@ -776,7 +791,9 @@ export async function resolveMoodleFolderFiles(
   const finalUrl = response.url || material.url;
   if (isLoginPageUrl(finalUrl)) {
     controller.abort();
-    throw new Error('Moodle session expired. Please sign in with UniPD SSO again.');
+    throw new MoodleSessionExpiredError(
+      'Moodle session expired. Please sign in with UniPD SSO again.',
+    );
   }
 
   if (!isSameOrigin(finalUrl, MOODLE_ORIGIN)) {
@@ -792,7 +809,9 @@ export async function resolveMoodleFolderFiles(
 
   const html = await response.text();
   if (isUnauthenticatedMoodleHtml(html, finalUrl)) {
-    throw new Error('Moodle session expired. Please sign in with UniPD SSO again.');
+    throw new MoodleSessionExpiredError(
+      'Moodle session expired. Please sign in with UniPD SSO again.',
+    );
   }
 
   return parseFolderFilesFromHtml(html, DEFAULT_MOODLE_BASE_URL);
@@ -978,6 +997,33 @@ export async function resolveDownloadUrlFromDescriptor(
 }
 
 let activeDownloadManager: DownloadManager | null = null;
+let activeAuthManager: AuthManager | null = null;
+
+export function getAuthManager(): AuthManager {
+  if (!activeAuthManager) {
+    activeAuthManager = new AuthManager({
+      onSessionUpdated(session) {
+        void writeSsoProbeState({
+          lastKnownAuthenticated: session.authenticated,
+          ...(session.authenticated ? { awaitingSsoLogin: false } : {}),
+        });
+        if (session.authenticated) {
+          void broadcastEvent({
+            type: 'SESSION_UPDATED',
+            session: toPublicSession(session),
+          });
+        }
+      },
+      onAuthConfigUpdated(config) {
+        void broadcastEvent({
+          type: 'AUTH_CONFIG_UPDATED',
+          config,
+        });
+      },
+    });
+  }
+  return activeAuthManager;
+}
 
 function getDownloadManager(): DownloadManager {
   if (!activeDownloadManager) {
@@ -985,7 +1031,8 @@ function getDownloadManager(): DownloadManager {
       api: createChromeDownloadsAdapter(),
       storage: createSessionQueueStorageAdapter(),
       maxConcurrent: DEFAULT_MAX_CONCURRENT_DOWNLOADS,
-      resolveDownloadUrl: (descriptor) => resolveDownloadUrlFromDescriptor(descriptor),
+      resolveDownloadUrl: (descriptor) =>
+        getAuthManager().withAutoReauth(() => resolveDownloadUrlFromDescriptor(descriptor)),
       allowedOrigins: ALLOWED_MEDIA_ORIGINS,
       onStateChange(state) {
         void broadcastEvent({ type: 'QUEUE_UPDATED', state });
@@ -1013,10 +1060,26 @@ export async function handleMessage(
   request: ExtensionRequest,
 ): Promise<ExtensionResponse<ExtensionRequest['type']>> {
   const manager = getDownloadManager();
+  const auth = getAuthManager();
 
   switch (request.type) {
     case 'GET_SESSION_STATUS': {
-      const session = await fetchMoodleSession(DEFAULT_MOODLE_BASE_URL);
+      let session: MoodleSessionInfo;
+      try {
+        session = await auth.ensureAuthenticated({
+          allowAutoLogin: request.autoLogin !== false,
+        });
+      } catch (err) {
+        if (!(err instanceof ShibbolethAuthError)) {
+          throw err;
+        }
+        session = {
+          authenticated: false,
+          userId: null,
+          sesskey: null,
+          loginUrl: `${DEFAULT_MOODLE_BASE_URL}${UNIPD_SHIBBOLETH_LOGIN_PATH}`,
+        };
+      }
       await writeSsoProbeState({
         lastKnownAuthenticated: session.authenticated,
         ...(session.authenticated ? { awaitingSsoLogin: false } : {}),
@@ -1031,22 +1094,92 @@ export async function handleMessage(
       return { ok: true, opened: true, tabId: tab.id ?? null };
     }
 
-    case 'LIST_COURSES': {
-      const session = await fetchMoodleSession(DEFAULT_MOODLE_BASE_URL);
-      await writeSsoProbeState({
-        lastKnownAuthenticated: session.authenticated,
-        ...(session.authenticated ? { awaitingSsoLogin: false } : {}),
+    case 'GET_AUTH_CONFIG': {
+      const config = await auth.getAuthConfig();
+      return { ok: true, config };
+    }
+
+    case 'SAVE_AUTH_CREDENTIALS': {
+      let config = await auth.saveCredentials({
+        username: request.username,
+        domain: request.domain,
+        password: request.password,
+        enabled: request.enabled,
       });
-      if (!session.authenticated || !session.sesskey) {
-        throw new Error('Not signed in to UniPD Moodle. Please log in with UniPD SSO first.');
+      let session: MoodleSessionInfo | undefined;
+      if (config.enabled) {
+        try {
+          session = await auth.ensureAuthenticated({ allowAutoLogin: true });
+          config = await auth.getAuthConfig();
+        } catch {
+          config = await auth.getAuthConfig();
+        }
       }
-      const courses = await fetchEnrolledCourses(DEFAULT_MOODLE_BASE_URL, session.sesskey);
+      return {
+        ok: true,
+        config,
+        ...(session ? { session: toPublicSession(session) } : {}),
+      };
+    }
+
+    case 'CLEAR_AUTH_CREDENTIALS': {
+      const config = await auth.clearCredentials();
+      return { ok: true, config };
+    }
+
+    case 'SET_AUTO_LOGIN_ENABLED': {
+      let config = await auth.setAutoLoginEnabled(request.enabled);
+      let session: MoodleSessionInfo | undefined;
+      if (config.enabled && config.configured && !config.blockedReason) {
+        try {
+          session = await auth.ensureAuthenticated({ allowAutoLogin: true });
+          config = await auth.getAuthConfig();
+        } catch {
+          config = await auth.getAuthConfig();
+        }
+      }
+      return {
+        ok: true,
+        config,
+        ...(session ? { session: toPublicSession(session) } : {}),
+      };
+    }
+
+    case 'AUTO_LOGIN_NOW': {
+      const session = await auth.ensureAuthenticated({
+        allowAutoLogin: true,
+        forceAutoLogin: true,
+      });
+      const config = await auth.getAuthConfig();
+      return {
+        ok: true,
+        config,
+        session: toPublicSession(session),
+      };
+    }
+
+    case 'LIST_COURSES': {
+      const courses = await auth.withAutoReauth(async () => {
+        const session = await fetchMoodleSession(DEFAULT_MOODLE_BASE_URL);
+        await writeSsoProbeState({
+          lastKnownAuthenticated: session.authenticated,
+          ...(session.authenticated ? { awaitingSsoLogin: false } : {}),
+        });
+        if (!session.authenticated || !session.sesskey) {
+          throw new MoodleSessionExpiredError(
+            'Not signed in to UniPD Moodle. Please log in with UniPD SSO first.',
+          );
+        }
+        return fetchEnrolledCourses(DEFAULT_MOODLE_BASE_URL, session.sesskey);
+      });
       return { ok: true, courses };
     }
 
     case 'SCAN_COURSE_LECTURES': {
-      const html = await fetchCoursePageHtml(DEFAULT_MOODLE_BASE_URL, request.courseId);
-      const scan = parseCourseContentFromHtml(html, request.courseId, DEFAULT_MOODLE_BASE_URL);
+      const scan = await auth.withAutoReauth(async () => {
+        const html = await fetchCoursePageHtml(DEFAULT_MOODLE_BASE_URL, request.courseId);
+        return parseCourseContentFromHtml(html, request.courseId, DEFAULT_MOODLE_BASE_URL);
+      });
       return {
         ok: true,
         courseId: request.courseId,
@@ -1056,12 +1189,12 @@ export async function handleMessage(
     }
 
     case 'RESOLVE_LECTURE_MEDIA': {
-      const media = await resolveActivityMedia(request.activity);
+      const media = await auth.withAutoReauth(() => resolveActivityMedia(request.activity));
       return { ok: true, media: toPublicLectureMedia(media) };
     }
 
     case 'RESOLVE_FOLDER_FILES': {
-      const files = await resolveMoodleFolderFiles(request.material);
+      const files = await auth.withAutoReauth(() => resolveMoodleFolderFiles(request.material));
       return { ok: true, files: toPublicFolderFiles(files) };
     }
 

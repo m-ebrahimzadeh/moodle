@@ -43,6 +43,87 @@
       <main class="app-main">
         <div id="global-alert" class="alert" role="alert" hidden></div>
 
+        <!-- Optional Automatic Shibboleth SSO Credentials -->
+        <details id="auto-login-details" class="panel auto-login-details">
+          <summary class="auto-login-summary">
+            <span class="auto-login-summary-title">Auto-Login (UniPD SSO)</span>
+            <span id="auto-login-status-badge" class="badge">Off</span>
+          </summary>
+
+          <form id="auto-login-form" class="auto-login-form" method="post">
+            <p id="auto-login-note" class="muted-caption" aria-live="polite">
+              Credentials stay encrypted locally in this browser profile.
+            </p>
+            <div id="auto-login-error" class="alert" role="alert" hidden></div>
+
+            <div class="filter-row">
+              <label class="field field-grow" for="sso-username-input">
+                <span class="field-label">UniPD Username / Email</span>
+                <input
+                  id="sso-username-input"
+                  name="username"
+                  type="text"
+                  inputmode="email"
+                  autocomplete="username"
+                  autocorrect="off"
+                  autocapitalize="none"
+                  spellcheck="false"
+                  placeholder="name.surname@studenti.unipd.it"
+                  required
+                />
+              </label>
+
+              <label class="field" for="sso-domain-select">
+                <span class="field-label">Domain</span>
+                <select id="sso-domain-select" name="domain">
+                  <option value="@studenti.unipd.it" selected>@studenti.unipd.it</option>
+                  <option value="@unipd.it">@unipd.it</option>
+                </select>
+              </label>
+            </div>
+
+            <div class="field">
+              <label class="field-label" for="sso-password-input">Password</label>
+              <div class="password-input-row">
+                <input
+                  id="sso-password-input"
+                  name="password"
+                  type="password"
+                  autocomplete="current-password"
+                  placeholder="Enter UniPD password"
+                  required
+                />
+                <button
+                  id="toggle-sso-password-btn"
+                  type="button"
+                  class="btn btn-ghost btn-sm"
+                  aria-pressed="false"
+                  aria-label="Show password"
+                >
+                  Show
+                </button>
+              </div>
+            </div>
+
+            <label class="checkbox-label" for="auto-login-enabled-toggle">
+              <input id="auto-login-enabled-toggle" type="checkbox" checked />
+              <span>Enable automatic SSO login on startup &amp; session expiry</span>
+            </label>
+
+            <div class="auto-login-actions">
+              <button id="save-credentials-btn" type="submit" class="btn btn-primary btn-sm">
+                Save Credentials
+              </button>
+              <button id="auto-login-now-btn" type="button" class="btn btn-ghost btn-sm" hidden>
+                Sign in now
+              </button>
+              <button id="clear-credentials-btn" type="button" class="btn btn-ghost btn-sm" hidden>
+                Forget
+              </button>
+            </div>
+          </form>
+        </details>
+
         <!-- Course Discovery & Filter Section -->
         <section id="courses-panel" class="panel" aria-labelledby="courses-heading">
           <div class="panel-header">

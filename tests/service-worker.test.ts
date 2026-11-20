@@ -15,6 +15,7 @@ import {
   toPublicLectureMedia,
 } from '../src/extension/service-worker.js';
 import {
+  REDACTED_AUTHENTICATED_MY_COURSES_HTML,
   REDACTED_COURSE_PAGE_WITH_DRAWER_HTML,
   REDACTED_FOLDER_PAGE_HTML,
   REDACTED_GUEST_MY_COURSES_HTML,
@@ -22,6 +23,10 @@ import {
   REDACTED_LOGIN_PAGE_HTML,
   REDACTED_PLAYER_BRIDGE_HTML,
   REDACTED_RESOURCE_WRAPPER_HTML,
+  REDACTED_SHIB_E1S1_INTERSTITIAL_HTML,
+  REDACTED_SHIB_E1S2_INVALID_LOGIN_HTML,
+  REDACTED_SHIB_E1S2_LOGIN_HTML,
+  REDACTED_SHIB_SAML_POST_HTML,
 } from './fixtures/moodle-fixtures.js';
 
 function makeActivity(overrides: Partial<LectureActivity> = {}): LectureActivity {
@@ -863,6 +868,347 @@ describe('service-worker helpers', () => {
         });
       } finally {
         (globalThis as { chrome?: unknown }).chrome = originalChrome;
+      }
+    });
+  });
+
+  describe('Auto-login IPC boundary & session-expiry recovery [TASK-009]', () => {
+    function createMockIndexedDb() {
+      const stores = new Map<string, Map<string, unknown>>();
+      const mockDb = {
+        objectStoreNames: {
+          contains: (name: string) => stores.has(name),
+        },
+        createObjectStore: (name: string) => {
+          if (!stores.has(name)) {
+            stores.set(name, new Map());
+          }
+          return {};
+        },
+        transaction: (storeName: string) => {
+          const storeMap = stores.get(storeName) ?? new Map<string, unknown>();
+          stores.set(storeName, storeMap);
+          const tx = {
+            oncomplete: null as null | (() => void),
+            onerror: null as null | (() => void),
+            onabort: null as null | (() => void),
+            error: null,
+            objectStore: () => ({
+              get: (key: string) => {
+                const req = {
+                  result: undefined as unknown,
+                  error: null,
+                  onsuccess: null as null | (() => void),
+                  onerror: null as null | (() => void),
+                };
+                queueMicrotask(() => {
+                  req.result = storeMap.get(key);
+                  req.onsuccess?.();
+                });
+                return req;
+              },
+              put: (val: unknown, key: string) => {
+                storeMap.set(key, val);
+                queueMicrotask(() => tx.oncomplete?.());
+              },
+              delete: (key: string) => {
+                storeMap.delete(key);
+                queueMicrotask(() => tx.oncomplete?.());
+              },
+            }),
+          };
+          return tx;
+        },
+        close: () => {},
+      };
+
+      return {
+        open: () => {
+          const req = {
+            result: mockDb,
+            error: null,
+            onupgradeneeded: null as null | (() => void),
+            onsuccess: null as null | (() => void),
+            onerror: null as null | (() => void),
+          };
+          queueMicrotask(() => {
+            req.onupgradeneeded?.();
+            req.onsuccess?.();
+          });
+          return req;
+        },
+      };
+    }
+
+    it('enforces write-only credential boundary and recovers expired course scan via handleMessage', async () => {
+      const localStore: Record<string, unknown> = {};
+      const originalChrome = (globalThis as { chrome?: unknown }).chrome;
+      const originalIndexedDb = (globalThis as { indexedDB?: unknown }).indexedDB;
+      const originalFetch = globalThis.fetch;
+
+      (globalThis as { indexedDB: unknown }).indexedDB = createMockIndexedDb();
+      (globalThis as { chrome: unknown }).chrome = {
+        storage: {
+          local: {
+            get: vi.fn(async (key: string) => ({ [key]: localStore[key] })),
+            set: vi.fn(async (items: Record<string, unknown>) => {
+              Object.assign(localStore, items);
+            }),
+            remove: vi.fn(async (key: string) => {
+              delete localStore[key];
+            }),
+          },
+          session: {
+            get: vi.fn(async () => ({})),
+            set: vi.fn(async () => {}),
+          },
+        },
+        downloads: {
+          download: vi.fn(),
+          cancel: vi.fn(),
+          search: vi.fn(async () => []),
+        },
+        runtime: {
+          id: 'test-ext',
+          sendMessage: vi.fn(async () => undefined),
+        },
+      };
+
+      let authenticated = false;
+      globalThis.fetch = vi.fn<typeof fetch>(async (input, init) => {
+        const url = String(input);
+        if (url.includes('/course/view.php')) {
+          const res = new Response(
+            authenticated ? REDACTED_COURSE_PAGE_WITH_DRAWER_HTML : REDACTED_GUEST_MY_COURSES_HTML,
+            { status: 200, headers: { 'Content-Type': 'text/html' } },
+          );
+          Object.defineProperty(res, 'url', { value: url });
+          return res;
+        }
+        if (url.endsWith('/my/courses.php')) {
+          const res = new Response(
+            authenticated ? REDACTED_AUTHENTICATED_MY_COURSES_HTML : REDACTED_GUEST_MY_COURSES_HTML,
+            { status: 200, headers: { 'Content-Type': 'text/html' } },
+          );
+          Object.defineProperty(res, 'url', { value: url });
+          return res;
+        }
+        if (url.endsWith('/auth/shibboleth/index.php')) {
+          const res = new Response(REDACTED_SHIB_E1S1_INTERSTITIAL_HTML, {
+            status: 200,
+            headers: { 'Content-Type': 'text/html' },
+          });
+          Object.defineProperty(res, 'url', {
+            value: 'https://shibidp.cca.unipd.it/idp/profile/SAML2/Redirect/SSO?execution=e1s1',
+          });
+          return res;
+        }
+        if (url.includes('execution=e1s1') && init?.method === 'POST') {
+          const res = new Response(REDACTED_SHIB_E1S2_LOGIN_HTML, {
+            status: 200,
+            headers: { 'Content-Type': 'text/html' },
+          });
+          Object.defineProperty(res, 'url', {
+            value: 'https://shibidp.cca.unipd.it/idp/profile/SAML2/Redirect/SSO?execution=e1s2',
+          });
+          return res;
+        }
+        if (url.includes('execution=e1s2') && init?.method === 'POST') {
+          const res = new Response(REDACTED_SHIB_SAML_POST_HTML, {
+            status: 200,
+            headers: { 'Content-Type': 'text/html' },
+          });
+          Object.defineProperty(res, 'url', {
+            value: 'https://shibidp.cca.unipd.it/idp/profile/SAML2/Redirect/SSO?execution=e1s2',
+          });
+          return res;
+        }
+        if (url.endsWith('/sp-shibboleth.sso/SAML2/POST') && init?.method === 'POST') {
+          authenticated = true;
+          const res = new Response(REDACTED_AUTHENTICATED_MY_COURSES_HTML, {
+            status: 200,
+            headers: { 'Content-Type': 'text/html' },
+          });
+          Object.defineProperty(res, 'url', { value: 'https://psico.elearning.unipd.it/' });
+          return res;
+        }
+        throw new Error(`Unexpected fetch URL: ${url}`);
+      });
+
+      try {
+        const saveRes = await handleMessage({
+          type: 'SAVE_AUTH_CREDENTIALS',
+          username: 'student.test@studenti.unipd.it',
+          domain: '@studenti.unipd.it',
+          password: 'NeverReturnThisPassword!',
+          enabled: false,
+        });
+
+        expect(saveRes.ok).toBe(true);
+        expect(JSON.stringify(saveRes)).not.toContain('NeverReturnThisPassword!');
+        expect(JSON.stringify(localStore)).not.toContain('NeverReturnThisPassword!');
+
+        const getRes = await handleMessage({ type: 'GET_AUTH_CONFIG' });
+        expect(getRes).toEqual({
+          ok: true,
+          config: {
+            configured: true,
+            enabled: false,
+            username: 'student.test@studenti.unipd.it',
+            domain: '@studenti.unipd.it',
+            blockedReason: null,
+          },
+        });
+
+        // Enable auto-login (logs in and refreshes session), then simulate session expiry
+        const enableRes = await handleMessage({ type: 'SET_AUTO_LOGIN_ENABLED', enabled: true });
+        expect(enableRes.ok).toBe(true);
+        if (enableRes.ok && 'session' in enableRes) {
+          expect(enableRes.session?.authenticated).toBe(true);
+        }
+
+        authenticated = false;
+        const scanRes = await handleMessage({ type: 'SCAN_COURSE_LECTURES', courseId: 7075 });
+        expect(scanRes.ok).toBe(true);
+        if (scanRes.ok && 'sections' in scanRes) {
+          expect(scanRes.sections).toHaveLength(1);
+        }
+
+        const clearRes = await handleMessage({ type: 'CLEAR_AUTH_CREDENTIALS' });
+        expect(clearRes).toEqual({
+          ok: true,
+          config: {
+            configured: false,
+            enabled: false,
+            username: null,
+            domain: '@studenti.unipd.it',
+            blockedReason: null,
+          },
+        });
+      } finally {
+        (globalThis as { chrome?: unknown }).chrome = originalChrome;
+        (globalThis as { indexedDB?: unknown }).indexedDB = originalIndexedDb;
+        globalThis.fetch = originalFetch;
+      }
+    });
+
+    it('handles GET_SESSION_STATUS passive auto-login & SAVE_AUTH_CREDENTIALS invalid-login breaker safely', async () => {
+      const localStore: Record<string, unknown> = {};
+      const originalChrome = (globalThis as { chrome?: unknown }).chrome;
+      const originalIndexedDb = (globalThis as { indexedDB?: unknown }).indexedDB;
+      const originalFetch = globalThis.fetch;
+
+      (globalThis as { indexedDB: unknown }).indexedDB = createMockIndexedDb();
+      (globalThis as { chrome: unknown }).chrome = {
+        storage: {
+          local: {
+            get: vi.fn(async (key: string) => ({ [key]: localStore[key] })),
+            set: vi.fn(async (items: Record<string, unknown>) => {
+              Object.assign(localStore, items);
+            }),
+            remove: vi.fn(async (key: string) => {
+              delete localStore[key];
+            }),
+          },
+          session: {
+            get: vi.fn(async () => ({})),
+            set: vi.fn(async () => {}),
+          },
+        },
+        downloads: {
+          download: vi.fn(),
+          cancel: vi.fn(),
+          search: vi.fn(async () => []),
+        },
+        runtime: {
+          id: 'test-ext',
+          sendMessage: vi.fn(async () => undefined),
+        },
+      };
+
+      let rejectLogin = true;
+      let authenticated = false;
+      globalThis.fetch = vi.fn<typeof fetch>(async (input, init) => {
+        const url = String(input);
+        if (url.endsWith('/my/courses.php')) {
+          const res = new Response(
+            authenticated ? REDACTED_AUTHENTICATED_MY_COURSES_HTML : REDACTED_GUEST_MY_COURSES_HTML,
+            { status: 200, headers: { 'Content-Type': 'text/html' } },
+          );
+          Object.defineProperty(res, 'url', { value: url });
+          return res;
+        }
+        if (url.endsWith('/auth/shibboleth/index.php')) {
+          const res = new Response(REDACTED_SHIB_E1S2_LOGIN_HTML, {
+            status: 200,
+            headers: { 'Content-Type': 'text/html' },
+          });
+          Object.defineProperty(res, 'url', {
+            value: 'https://shibidp.cca.unipd.it/idp/profile/SAML2/Redirect/SSO?execution=e1s2',
+          });
+          return res;
+        }
+        if (url.includes('execution=e1s2') && init?.method === 'POST') {
+          const res = new Response(
+            rejectLogin ? REDACTED_SHIB_E1S2_INVALID_LOGIN_HTML : REDACTED_SHIB_SAML_POST_HTML,
+            { status: 200, headers: { 'Content-Type': 'text/html' } },
+          );
+          Object.defineProperty(res, 'url', {
+            value: 'https://shibidp.cca.unipd.it/idp/profile/SAML2/Redirect/SSO?execution=e1s3',
+          });
+          return res;
+        }
+        if (url.endsWith('/sp-shibboleth.sso/SAML2/POST') && init?.method === 'POST') {
+          authenticated = true;
+          const res = new Response(REDACTED_AUTHENTICATED_MY_COURSES_HTML, {
+            status: 200,
+            headers: { 'Content-Type': 'text/html' },
+          });
+          Object.defineProperty(res, 'url', { value: 'https://psico.elearning.unipd.it/' });
+          return res;
+        }
+        throw new Error(`Unexpected fetch URL: ${url}`);
+      });
+
+      try {
+        // Save with enabled=true when IdP rejects credentials -> saves vault AND records blockedReason
+        const badSave = await handleMessage({
+          type: 'SAVE_AUTH_CREDENTIALS',
+          username: 'student.test@studenti.unipd.it',
+          domain: '@studenti.unipd.it',
+          password: 'WrongPassword1',
+          enabled: true,
+        });
+        expect(badSave.ok && 'config' in badSave).toBe(true);
+        if (badSave.ok && 'config' in badSave) {
+          expect(badSave.config.blockedReason).toContain('Credenziali non valide');
+        }
+
+        // GET_SESSION_STATUS returns authenticated=false cleanly while blockedReason is set
+        const blockedStatus = await handleMessage({ type: 'GET_SESSION_STATUS' });
+        expect(blockedStatus).toEqual({
+          ok: true,
+          session: {
+            authenticated: false,
+            userId: null,
+            loginUrl: 'https://psico.elearning.unipd.it/auth/shibboleth/index.php',
+          },
+        });
+
+        // AUTO_LOGIN_NOW retries explicitly and succeeds once credentials are accepted
+        rejectLogin = false;
+        const forced = await handleMessage({ type: 'AUTO_LOGIN_NOW' });
+        expect(forced.ok && 'config' in forced && 'session' in forced && Boolean(forced.session)).toBe(true);
+        if (forced.ok && 'config' in forced && 'session' in forced && forced.session) {
+          expect(forced.session.authenticated).toBe(true);
+          expect(forced.config.blockedReason).toBeNull();
+        }
+
+        await handleMessage({ type: 'CLEAR_AUTH_CREDENTIALS' });
+      } finally {
+        (globalThis as { chrome?: unknown }).chrome = originalChrome;
+        (globalThis as { indexedDB?: unknown }).indexedDB = originalIndexedDb;
+        globalThis.fetch = originalFetch;
       }
     });
   });

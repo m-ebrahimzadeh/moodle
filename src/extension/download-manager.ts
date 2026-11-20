@@ -133,7 +133,7 @@ export function sanitizeErrorMessage(raw: unknown): string {
     })
     .replace(/\/ks\/[^/\s?#)]+/gi, '/ks/[REDACTED]')
     .replace(
-      /\b((?:ks|sesskey|Policy|Signature|Key-Pair-Id|MoodleSession\w*|_shibsession_\w+)=)[^&\s;)]+/gi,
+      /\b((?:ks|sesskey|Policy|Signature|Key-Pair-Id|MoodleSession\w*|_shibsession_\w+|__Host-JSESSIONID|j_password|password|SAMLResponse|RelayState)=)[^&\s;)]+/gi,
       '$1[REDACTED]',
     );
 }
