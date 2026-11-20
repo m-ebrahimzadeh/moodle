@@ -256,3 +256,54 @@ export const REDACTED_KALTURA_MULTIREQUEST_RESPONSE = [
     drm: [],
   },
 ];
+
+export const REDACTED_RESOURCE_WRAPPER_HTML = `<!doctype html>
+<html lang="en">
+<body class="format-topics">
+  <section id="region-main">
+    <div class="resourceworkaround">
+      Click <a href="https://psico.elearning.unipd.it/pluginfile.php/45678/mod_resource/content/1/Week%203%20Slides.pptx">Week 3 Slides.pptx</a> link to view the file.
+    </div>
+  </section>
+</body>
+</html>`;
+
+export const REDACTED_FOLDER_PAGE_HTML = `<!doctype html>
+<html lang="en">
+<body class="format-topics">
+  <nav id="course-index">
+    <a href="/pluginfile.php/999/mod_folder/content/0/DrawerOnly.pdf">DrawerOnly.pdf</a>
+  </nav>
+  <section id="region-main">
+    <div class="foldertree">
+      <ul>
+        <li>
+          <span class="fp-filename-icon"><span class="fp-filename">Datasets</span></span>
+          <ul>
+            <li>
+              <a href="https://psico.elearning.unipd.it/pluginfile.php/77777/mod_folder/content/0/Datasets/week_01%20data.sav?forcedownload=1">
+                <span class="fp-filename">week_01 data.sav</span>
+              </a>
+            </li>
+            <li>
+              <a href="https://psico.elearning.unipd.it/pluginfile.php/77777/mod_folder/content/0/Datasets/week_01%20data.sav">
+                <span class="fp-filename">week_01 data.sav (dup)</span>
+              </a>
+            </li>
+            <li>
+              <a href="https://evil.example/pluginfile.php/77777/mod_folder/content/0/Datasets/evil.exe">
+                <span class="fp-filename">evil.exe</span>
+              </a>
+            </li>
+          </ul>
+        </li>
+        <li>
+          <a href="/pluginfile.php/77777/mod_folder/content/0/README%20%281%29.pdf?forcedownload=1">
+            <span class="fp-filename">README (1).pdf</span>
+          </a>
+        </li>
+      </ul>
+    </div>
+  </section>
+</body>
+</html>`;

@@ -1,4 +1,6 @@
 import type {
+  CourseMaterialActivity,
+  CourseMaterialSection,
   CourseSection,
   EnrolledCourse,
   LectureActivity,
@@ -47,7 +49,14 @@ export interface PublicResolvedLectureMedia {
   hasDirectMp4: boolean;
 }
 
-export type DownloadKind = 'video' | 'subtitle';
+export type DownloadKind = 'video' | 'subtitle' | 'material';
+
+export interface PublicFolderFile {
+  fileIndex: number;
+  name: string;
+  subPath: string[];
+  ext: string;
+}
 
 export type DownloadTaskStatus =
   | 'queued'
@@ -61,16 +70,29 @@ export type DownloadTaskStatus =
  * can lazily re-resolve fresh Kaltura/Moodle URLs after MV3 service worker restarts
  * or >1h batch durations without storing `ks`, `sesskey`, or signed URLs.
  */
-export interface DownloadResolutionDescriptor {
-  activity: LectureActivity;
-  kind: DownloadKind;
-  filename: string;
-  preferredFlavorId?: string | null;
-  preferredHeight?: number | null;
-  captionLanguageCode?: string | null;
-  captionLabel?: string | null;
-  captionIndex?: number | null;
-}
+export type DownloadResolutionDescriptor =
+  | {
+      kind: 'video' | 'subtitle';
+      activity: LectureActivity;
+      filename: string;
+      preferredFlavorId?: string | null;
+      preferredHeight?: number | null;
+      captionLanguageCode?: string | null;
+      captionLabel?: string | null;
+      captionIndex?: number | null;
+    }
+  | {
+      kind: 'material';
+      material: CourseMaterialActivity;
+      filename: string;
+      folderFileIndex?: number;
+      expectedFileName?: string;
+      pathContext?: {
+        academicYear: string | null;
+        courseCode: string | null;
+        courseTitle: string;
+      };
+    };
 
 export interface EnqueueDownloadItem {
   cmid: number;
@@ -114,6 +136,7 @@ export type ExtensionRequest =
   | { type: 'LIST_COURSES' }
   | { type: 'SCAN_COURSE_LECTURES'; courseId: number }
   | { type: 'RESOLVE_LECTURE_MEDIA'; activity: LectureActivity }
+  | { type: 'RESOLVE_FOLDER_FILES'; material: CourseMaterialActivity }
   | { type: 'ENQUEUE_DOWNLOADS'; items: EnqueueDownloadItem[] }
   | { type: 'GET_QUEUE_STATE' }
   | { type: 'CANCEL_DOWNLOAD'; taskId: string }
@@ -123,8 +146,13 @@ export type ExtensionResponseMap = {
   GET_SESSION_STATUS: { session: PublicSessionStatus };
   OPEN_SSO_LOGIN: { opened: boolean; tabId: number | null };
   LIST_COURSES: { courses: EnrolledCourse[] };
-  SCAN_COURSE_LECTURES: { courseId: number; sections: CourseSection[] };
+  SCAN_COURSE_LECTURES: {
+    courseId: number;
+    sections: CourseSection[];
+    materialSections: CourseMaterialSection[];
+  };
   RESOLVE_LECTURE_MEDIA: { media: PublicResolvedLectureMedia };
+  RESOLVE_FOLDER_FILES: { files: PublicFolderFile[] };
   ENQUEUE_DOWNLOADS: { enqueuedIds: string[]; state: DownloadQueueState };
   GET_QUEUE_STATE: { state: DownloadQueueState };
   CANCEL_DOWNLOAD: { state: DownloadQueueState };

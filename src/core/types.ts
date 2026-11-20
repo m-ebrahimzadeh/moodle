@@ -103,3 +103,52 @@ export interface LectureDownloadPathParams {
   resolutionLabel?: string;
   ext: string;
 }
+
+export type MaterialActivityType = 'resource' | 'folder';
+
+export interface CourseMaterialActivity {
+  cmid: number;
+  courseId: number;
+  sectionIndex: number;
+  sectionTitle: string;
+  activityIndex: number;
+  title: string;
+  type: MaterialActivityType;
+  url: string;
+  fileTypeHint: string | null;
+  detailsText: string | null;
+}
+
+export interface CourseMaterialSection {
+  sectionIndex: number;
+  sectionId: string;
+  title: string;
+  materials: CourseMaterialActivity[];
+}
+
+export interface CourseContentScan {
+  sections: CourseSection[];
+  materialSections: CourseMaterialSection[];
+}
+
+export interface FolderFileEntry {
+  fileIndex: number;
+  name: string;
+  subPath: string[];
+  ext: string;
+  url: string;
+}
+
+export interface MaterialDownloadPathParams {
+  academicYear: string | null;
+  courseCode: string | null;
+  courseTitle: string;
+  sectionIndex: number;
+  sectionTitle: string;
+  activityIndex: number;
+  materialTitle: string;
+  folderName?: string | null;
+  subPath?: string[];
+  fileName?: string | null;
+  ext: string;
+}

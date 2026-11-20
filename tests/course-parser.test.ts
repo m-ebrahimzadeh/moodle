@@ -1,9 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import {
   extractPluginfileMp4Url,
+  extractPluginfileResourceUrl,
+  parseContentDispositionFilename,
+  parseCourseContentFromHtml,
   parseCourseSectionsFromHtml,
+  parseFolderFilesFromHtml,
 } from '../src/core/course-parser.js';
-import { REDACTED_COURSE_PAGE_WITH_DRAWER_HTML } from './fixtures/moodle-fixtures.js';
+import {
+  REDACTED_COURSE_PAGE_WITH_DRAWER_HTML,
+  REDACTED_FOLDER_PAGE_HTML,
+  REDACTED_RESOURCE_WRAPPER_HTML,
+} from './fixtures/moodle-fixtures.js';
 
 describe('course-parser', () => {
   describe('parseCourseSectionsFromHtml', () => {
@@ -138,6 +146,331 @@ describe('course-parser', () => {
       const protocolRelativeEvil = `
         <script>var u = "//evil.example/pluginfile.php/1/a.mp4";</script>`;
       expect(extractPluginfileMp4Url(protocolRelativeEvil)).toBeNull();
+    });
+  });
+
+  describe('parseCourseContentFromHtml (Phase 2A static materials)', () => {
+    it('partitions video lectures and static materials while isolating #region-main from #course-index', () => {
+      const scan = parseCourseContentFromHtml(REDACTED_COURSE_PAGE_WITH_DRAWER_HTML, 7075);
+
+      expect(scan.sections).toHaveLength(1);
+      expect(scan.sections[0]?.activities.map((a) => a.cmid)).toEqual([300154, 255123, 275926]);
+
+      expect(scan.materialSections).toHaveLength(2);
+      const sec0 = scan.materialSections[0]!;
+      expect(sec0.sectionIndex).toBe(0);
+      expect(sec0.materials).toEqual([
+        {
+          cmid: 200002,
+          courseId: 7075,
+          sectionIndex: 0,
+          sectionTitle: 'General',
+          activityIndex: 1,
+          title: 'Course Syllabus Video Notes.pdf',
+          type: 'resource',
+          url: 'https://psico.elearning.unipd.it/mod/resource/view.php?id=200002',
+          fileTypeHint: 'pdf',
+          detailsText: '1.4 MB PDF document',
+        },
+      ]);
+
+      const sec3 = scan.materialSections[1]!;
+      expect(sec3.sectionIndex).toBe(3);
+      expect(sec3.materials).toEqual([
+        {
+          cmid: 296773,
+          courseId: 7075,
+          sectionIndex: 3,
+          sectionTitle: '1. Introduction: Measurement and Validity — Oct 5 - 14',
+          activityIndex: 1,
+          title: 'Slide Deck Archive',
+          type: 'folder',
+          url: 'https://psico.elearning.unipd.it/mod/folder/view.php?id=296773',
+          fileTypeHint: 'folder',
+          detailsText: null,
+        },
+      ]);
+    });
+
+    it('detects R, Rmd, sav, jasp, and icon/details hints for static mod_resource items', () => {
+      const html = `
+        <section id="region-main">
+          <ul class="topics">
+            <li id="section-1" class="section course-section" data-sectionid="2010" data-section="1">
+              <h3 class="sectionname">Week 2</h3>
+              <ul class="section">
+                <li id="module-501" class="activity modtype_resource" data-id="501">
+                  <img class="activityicon" src="/theme/image.php/dlm_theme/core/1/f/powerpoint" alt="" />
+                  <a class="aalink" href="/mod/resource/view.php?id=501"><span class="instancename">Week 2 Slides</span></a>
+                  <span class="resourcelinkdetails">3.2 MB PowerPoint presentation</span>
+                </li>
+                <li id="module-502" class="activity modtype_resource" data-id="502">
+                  <a class="aalink" href="/mod/resource/view.php?id=502"><span class="instancename">lab_script.R</span></a>
+                </li>
+                <li id="module-503" class="activity modtype_resource" data-id="503">
+                  <a class="aalink" href="/mod/resource/view.php?id=503"><span class="instancename">survey_data.sav</span></a>
+                </li>
+                <li id="module-504" class="activity modtype_resource" data-id="504">
+                  <a class="aalink" href="/mod/resource/view.php?id=504"><span class="instancename">anova.jasp</span></a>
+                </li>
+              </ul>
+            </li>
+          </ul>
+        </section>`;
+
+      const { materialSections } = parseCourseContentFromHtml(html, 7075);
+      expect(materialSections).toHaveLength(1);
+      expect(materialSections[0]?.materials.map((m) => [m.cmid, m.fileTypeHint, m.detailsText])).toEqual([
+        [501, 'slides', '3.2 MB PowerPoint presentation'],
+        [502, 'r', null],
+        [503, 'sav', null],
+        [504, 'jasp', null],
+      ]);
+    });
+
+    it('eliminates Moodle 4.5 nested mod_subsection duplicate rows and preserves exact owning sections', () => {
+      const html = `
+        <section id="region-main">
+          <ul class="topics">
+            <li id="section-1" class="section course-section main" data-sectionid="3001" data-section="1">
+              <h3 class="sectionname">Week 1</h3>
+              <div class="content">
+                <ul class="section">
+                  <li id="module-601" class="activity modtype_resource" data-id="601">
+                    <a class="aalink" href="/mod/resource/view.php?id=601"><span class="instancename">Week 1 Overview.pdf</span></a>
+                  </li>
+                  <li id="module-602" class="activity modtype_subsection activity-wrapper" data-id="602">
+                    <div class="subsection-content">
+                      <li id="section-4" class="section course-section delegated-section" data-sectionid="3004" data-number="4">
+                        <h4 class="sectionname">Subsection A: Labs</h4>
+                        <ul class="section">
+                          <li id="module-603" class="activity modtype_resource" data-id="603">
+                            <a class="aalink" href="/mod/resource/view.php?id=603"><span class="instancename">Lab Dataset.csv</span></a>
+                          </li>
+                          <li id="module-604" class="activity modtype_videotime" data-id="604">
+                            <a class="aalink" href="/mod/videotime/view.php?id=604"><span class="instancename">Lab Demo Video</span></a>
+                          </li>
+                        </ul>
+                      </li>
+                    </div>
+                  </li>
+                  <li id="module-605" class="activity modtype_kalvidres" data-id="605">
+                    <a class="aalink" href="/mod/kalvidres/view.php?id=605"><span class="instancename">Week 1 Main Lecture</span></a>
+                  </li>
+                </ul>
+              </div>
+            </li>
+            <li id="section-2" class="section course-section main" data-sectionid="3002" data-section="2">
+              <h3 class="sectionname">Week 2</h3>
+              <ul class="section">
+                <li id="module-603" class="activity modtype_resource" data-id="603">
+                  <a class="aalink" href="/mod/resource/view.php?id=603"><span class="instancename">Lab Dataset.csv</span></a>
+                </li>
+              </ul>
+            </li>
+          </ul>
+        </section>`;
+
+      const scan = parseCourseContentFromHtml(html, 7075);
+
+      expect(scan.sections.map((s) => ({ title: s.title, sectionIndex: s.sectionIndex, cmids: s.activities.map((a) => a.cmid) }))).toEqual([
+        { title: 'Week 1', sectionIndex: 1, cmids: [605] },
+        { title: 'Subsection A: Labs', sectionIndex: 4, cmids: [604] },
+      ]);
+      expect(scan.materialSections.map((s) => ({ title: s.title, sectionIndex: s.sectionIndex, cmids: s.materials.map((m) => m.cmid) }))).toEqual([
+        { title: 'Week 1', sectionIndex: 1, cmids: [601] },
+        { title: 'Subsection A: Labs', sectionIndex: 4, cmids: [603] },
+      ]);
+
+      // Ensure total rendered rows === unique cmids (no modtype_subsection phantom or cross-section dupes)
+      const allMaterialCmids = scan.materialSections.flatMap((s) => s.materials.map((m) => m.cmid));
+      expect(allMaterialCmids).toEqual([601, 603]);
+      expect(new Set(allMaterialCmids).size).toBe(allMaterialCmids.length);
+    });
+
+    it('preserves extensions when resource titles contain literal question marks or hashes', () => {
+      const html = `
+        <section id="region-main">
+          <ul class="topics">
+            <li id="section-1" class="section course-section" data-sectionid="2020" data-section="1">
+              <h3 class="sectionname">Readings</h3>
+              <ul class="section">
+                <li id="module-701" class="activity modtype_resource" data-id="701">
+                  <a class="aalink" href="/mod/resource/view.php?id=701"><span class="instancename">Are Emotions Natural Kinds?.pdf</span></a>
+                </li>
+                <li id="module-702" class="activity modtype_resource" data-id="702">
+                  <a class="aalink" href="/mod/resource/view.php?id=702"><span class="instancename">Topic #2 Slides.pptx</span></a>
+                </li>
+              </ul>
+            </li>
+          </ul>
+        </section>`;
+
+      const { materialSections } = parseCourseContentFromHtml(html, 7075);
+      expect(materialSections[0]?.materials.map((m) => [m.title, m.fileTypeHint])).toEqual([
+        ['Are Emotions Natural Kinds?.pdf', 'pdf'],
+        ['Topic #2 Slides.pptx', 'pptx'],
+      ]);
+    });
+  });
+
+  describe('extractPluginfileResourceUrl', () => {
+    it('extracts same-origin pluginfile URLs from resourceworkaround, object, embed, iframe, and #region-main', () => {
+      expect(extractPluginfileResourceUrl(REDACTED_RESOURCE_WRAPPER_HTML)).toBe(
+        'https://psico.elearning.unipd.it/pluginfile.php/45678/mod_resource/content/1/Week%203%20Slides.pptx',
+      );
+      expect(
+        extractPluginfileResourceUrl(
+          '<object data="/pluginfile.php/10/mod_resource/content/0/doc.pdf" type="application/pdf"></object>',
+        ),
+      ).toBe('https://psico.elearning.unipd.it/pluginfile.php/10/mod_resource/content/0/doc.pdf');
+      expect(
+        extractPluginfileResourceUrl(
+          '<embed src="https://psico.elearning.unipd.it/pluginfile.php/11/mod_resource/content/0/deck.pdf">',
+        ),
+      ).toBe('https://psico.elearning.unipd.it/pluginfile.php/11/mod_resource/content/0/deck.pdf');
+      expect(
+        extractPluginfileResourceUrl(
+          '<iframe src="/pluginfile.php/12/mod_resource/content/0/handout.pdf"></iframe>',
+        ),
+      ).toBe('https://psico.elearning.unipd.it/pluginfile.php/12/mod_resource/content/0/handout.pdf');
+      expect(
+        extractPluginfileResourceUrl(
+          '<div id="region-main"><a href="/pluginfile.php/13/mod_resource/content/0/data.csv">CSV</a></div>',
+        ),
+      ).toBe('https://psico.elearning.unipd.it/pluginfile.php/13/mod_resource/content/0/data.csv');
+    });
+
+    it('rejects cross-origin pluginfile resource URLs', () => {
+      expect(
+        extractPluginfileResourceUrl(
+          '<div class="resourceworkaround"><a href="https://evil.example/pluginfile.php/1/a.pdf">Evil</a></div>',
+        ),
+      ).toBeNull();
+    });
+  });
+
+  describe('parseFolderFilesFromHtml', () => {
+    it('extracts nested subfolders, decodes filenames safely, deduplicates URLs, and rejects cross-origin links', () => {
+      const files = parseFolderFilesFromHtml(REDACTED_FOLDER_PAGE_HTML);
+
+      expect(files).toEqual([
+        {
+          fileIndex: 1,
+          name: 'week_01 data.sav',
+          subPath: ['Datasets'],
+          ext: 'sav',
+          url: 'https://psico.elearning.unipd.it/pluginfile.php/77777/mod_folder/content/0/Datasets/week_01%20data.sav?forcedownload=1',
+        },
+        {
+          fileIndex: 2,
+          name: 'README (1).pdf',
+          subPath: [],
+          ext: 'pdf',
+          url: 'https://psico.elearning.unipd.it/pluginfile.php/77777/mod_folder/content/0/README%20%281%29.pdf?forcedownload=1',
+        },
+      ]);
+    });
+
+    it('returns empty array when #region-main is absent and tolerates malformed % encodings', () => {
+      expect(parseFolderFilesFromHtml('<div class="foldertree"><a href="/pluginfile.php/1/mod_folder/content/0/a.pdf">a</a></div>')).toEqual([]);
+
+      const malformedHtml = `
+        <section id="region-main">
+          <a href="/pluginfile.php/5/mod_folder/content/0/100%ZZ_notes.pdf">100%ZZ_notes.pdf</a>
+        </section>`;
+      const parsed = parseFolderFilesFromHtml(malformedHtml);
+      expect(parsed).toHaveLength(1);
+      expect(parsed[0]?.name).toBe('100%ZZ_notes.pdf');
+      expect(parsed[0]?.ext).toBe('pdf');
+    });
+
+    it('preserves extensions when decoded folder filenames contain literal ? or # and falls back to DOM subPath', () => {
+      const html = `
+        <section id="region-main">
+          <div class="foldertree">
+            <ul>
+              <li>
+                <span class="fp-filename-icon"><span class="fp-filename">Stats</span></span>
+                <ul>
+                  <li>
+                    <span class="fp-filename-icon"><span class="fp-filename">R Scripts</span></span>
+                    <ul>
+                      <li>
+                        <a href="/pluginfile.php/555/course/legacy/0/model.R"><span class="fp-filename">model.R</span></a>
+                      </li>
+                    </ul>
+                  </li>
+                </ul>
+              </li>
+              <li>
+                <a href="/pluginfile.php/77777/mod_folder/content/0/Are%20Emotions%20Natural%20Kinds%3F.pdf?forcedownload=1">
+                  <span class="fp-filename">Are Emotions Natural Kinds?.pdf</span>
+                </a>
+              </li>
+              <li>
+                <a href="/pluginfile.php/77777/mod_folder/content/0/Notes%20%231.pptx?forcedownload=1">
+                  <span class="fp-filename">Notes #1.pptx</span>
+                </a>
+              </li>
+              <li>
+                <a href="/pluginfile.php/77777/mod_folder/content/0/Dr.%20Smith%20Notes%3F?forcedownload=1">
+                  <span class="fp-filename">Dr. Smith Notes?</span>
+                </a>
+              </li>
+            </ul>
+          </div>
+        </section>`;
+
+      const files = parseFolderFilesFromHtml(html);
+      expect(files).toEqual([
+        {
+          fileIndex: 1,
+          name: 'model.R',
+          subPath: ['Stats', 'R Scripts'],
+          ext: 'r',
+          url: 'https://psico.elearning.unipd.it/pluginfile.php/555/course/legacy/0/model.R',
+        },
+        {
+          fileIndex: 2,
+          name: 'Are Emotions Natural Kinds?.pdf',
+          subPath: [],
+          ext: 'pdf',
+          url: 'https://psico.elearning.unipd.it/pluginfile.php/77777/mod_folder/content/0/Are%20Emotions%20Natural%20Kinds%3F.pdf?forcedownload=1',
+        },
+        {
+          fileIndex: 3,
+          name: 'Notes #1.pptx',
+          subPath: [],
+          ext: 'pptx',
+          url: 'https://psico.elearning.unipd.it/pluginfile.php/77777/mod_folder/content/0/Notes%20%231.pptx?forcedownload=1',
+        },
+        {
+          fileIndex: 4,
+          name: 'Dr. Smith Notes?',
+          subPath: [],
+          ext: 'bin',
+          url: 'https://psico.elearning.unipd.it/pluginfile.php/77777/mod_folder/content/0/Dr.%20Smith%20Notes%3F?forcedownload=1',
+        },
+      ]);
+    });
+  });
+
+  describe('parseContentDispositionFilename', () => {
+    it('parses RFC 5987 UTF-8 filename* with precedence over quoted filename and strips traversal', () => {
+      expect(parseContentDispositionFilename(null)).toBeNull();
+      expect(
+        parseContentDispositionFilename(
+          `attachment; filename="fallback.pdf"; filename*=UTF-8''Lezione%203%20%E2%80%94%20Statistica.pptx`,
+        ),
+      ).toBe('Lezione 3 — Statistica.pptx');
+      expect(
+        parseContentDispositionFilename(`inline; filename="Week 3 Slides.pdf"`),
+      ).toBe('Week 3 Slides.pdf');
+      expect(
+        parseContentDispositionFilename(`attachment; filename=../../etc/passwd.txt`),
+      ).toBe('passwd.txt');
+      expect(parseContentDispositionFilename(`attachment; filename=".."` )).toBeNull();
     });
   });
 });

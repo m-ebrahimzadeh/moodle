@@ -1,15 +1,21 @@
 import {
   DEFAULT_MOODLE_BASE_URL,
   UNIPD_SHIBBOLETH_LOGIN_PATH,
+  buildMaterialDownloadPath,
   extractPluginfileMp4Url,
+  extractPluginfileResourceUrl,
   fetchCoursePageHtml,
   fetchEnrolledCourses,
   fetchMoodleSession,
   isLoginPageUrl,
   isUnauthenticatedMoodleHtml,
-  parseCourseSectionsFromHtml,
+  parseContentDispositionFilename,
+  parseCourseContentFromHtml,
+  parseFolderFilesFromHtml,
   resolveKalturaLectureMedia,
   type CaptionTrack,
+  type CourseMaterialActivity,
+  type FolderFileEntry,
   type LectureActivity,
   type MoodleSessionInfo,
   type ResolvedLectureMedia,
@@ -23,12 +29,14 @@ import {
   createSessionQueueStorageAdapter,
   sanitizeErrorMessage,
   validateAllowedMediaUrl,
+  type ResolvedDownloadTarget,
 } from './download-manager.js';
 import type {
   DownloadResolutionDescriptor,
   ExtensionBroadcastEvent,
   ExtensionRequest,
   ExtensionResponse,
+  PublicFolderFile,
   PublicResolvedLectureMedia,
   PublicSessionStatus,
 } from './messages.js';
@@ -47,6 +55,15 @@ export function toPublicSession(info: MoodleSessionInfo): PublicSessionStatus {
     userId: info.userId,
     loginUrl: info.loginUrl,
   };
+}
+
+export function toPublicFolderFiles(files: FolderFileEntry[]): PublicFolderFile[] {
+  return files.map((file) => ({
+    fileIndex: file.fileIndex,
+    name: file.name,
+    subPath: [...file.subPath],
+    ext: file.ext,
+  }));
 }
 
 /**
@@ -398,9 +415,293 @@ export async function resolveActivityMedia(
   return resolveMoodleHostedMp4(activity, fetchImpl);
 }
 
+export interface ResolvedMoodleResource {
+  url: string;
+  fileName: string | null;
+  ext: string | null;
+  sizeBytes: number;
+}
+
+const CONTENT_TYPE_TO_EXT: ReadonlyArray<[RegExp, string]> = [
+  [/application\/pdf/i, 'pdf'],
+  [/application\/vnd\.openxmlformats-officedocument\.presentationml\.presentation/i, 'pptx'],
+  [/application\/vnd\.ms-powerpoint/i, 'ppt'],
+  [/application\/vnd\.oasis\.opendocument\.presentation/i, 'odp'],
+  [/application\/vnd\.openxmlformats-officedocument\.wordprocessingml\.document/i, 'docx'],
+  [/application\/msword/i, 'doc'],
+  [/application\/vnd\.oasis\.opendocument\.text/i, 'odt'],
+  [/^(?:application|text)\/rtf/i, 'rtf'],
+  [/application\/vnd\.openxmlformats-officedocument\.spreadsheetml\.sheet/i, 'xlsx'],
+  [/application\/vnd\.ms-excel/i, 'xls'],
+  [/application\/vnd\.oasis\.opendocument\.spreadsheet/i, 'ods'],
+  [/text\/csv/i, 'csv'],
+  [/text\/tab-separated-values/i, 'tsv'],
+  [/application\/(?:x-)?zip(?:-compressed)?/i, 'zip'],
+  [/application\/(?:vnd\.rar|x-rar-compressed)/i, 'rar'],
+  [/application\/x-7z-compressed/i, '7z'],
+  [/application\/(?:x-)?gzip/i, 'gz'],
+  [/text\/markdown/i, 'md'],
+  [/text\/plain/i, 'txt'],
+  [/application\/json/i, 'json'],
+  [/^(?:application|text)\/xml/i, 'xml'],
+  [/application\/epub\+zip/i, 'epub'],
+  [/image\/png/i, 'png'],
+  [/image\/jpeg/i, 'jpg'],
+  [/image\/svg\+xml/i, 'svg'],
+  [/audio\/mpeg/i, 'mp3'],
+  [/audio\/wav/i, 'wav'],
+];
+
+function inferExtensionFromContentType(contentType: string): string | null {
+  for (const [pattern, ext] of CONTENT_TYPE_TO_EXT) {
+    if (pattern.test(contentType)) {
+      return ext;
+    }
+  }
+  return null;
+}
+
+function safeDecodePathBasename(urlString: string): string | null {
+  try {
+    const seg = new URL(urlString).pathname.split('/').pop() ?? '';
+    if (!seg) {
+      return null;
+    }
+    try {
+      return decodeURIComponent(seg);
+    } catch {
+      return seg;
+    }
+  } catch {
+    return null;
+  }
+}
+
+function extractExtensionFromFilename(name: string | null | undefined): string | null {
+  if (!name) {
+    return null;
+  }
+  const clean = name.trim();
+  const dotIdx = clean.lastIndexOf('.');
+  if (dotIdx > 0 && dotIdx < clean.length - 1) {
+    const rawExt = clean.slice(dotIdx + 1).trim();
+    if (/^[a-zA-Z0-9]{1,12}$/.test(rawExt)) {
+      return rawExt.toLowerCase();
+    }
+  }
+  return null;
+}
+
+function replaceFilenameExtension(existingPath: string, nextExt: string): string {
+  const cleanExt = nextExt.replace(/^\.+/, '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase() || 'bin';
+  const lastSlash = existingPath.lastIndexOf('/');
+  const dir = lastSlash >= 0 ? existingPath.slice(0, lastSlash + 1) : '';
+  const base = lastSlash >= 0 ? existingPath.slice(lastSlash + 1) : existingPath;
+  const dotIdx = base.lastIndexOf('.');
+  let stem = dotIdx > 0 ? base.slice(0, dotIdx) : base;
+  const dupSuffix = `.${cleanExt}`;
+  while (stem.length > dupSuffix.length && stem.toLowerCase().endsWith(dupSuffix)) {
+    stem = stem.slice(0, -dupSuffix.length).replace(/[.\s]+$/g, '');
+  }
+  return `${dir}${stem || 'Untitled'}.${cleanExt}`;
+}
+
+/**
+ * Lazily resolves a `mod_resource` static material URL (`/pluginfile.php/...`)
+ * while strictly enforcing `MOODLE_ORIGIN`, `isLoginPageUrl()`, `isSameOrigin()`,
+ * `isUnauthenticatedMoodleHtml()`, `ALLOWED_MEDIA_ORIGINS`, and immediate
+ * `controller.abort()` on non-HTML binary redirects so large files never enter RAM.
+ */
+export async function resolveMoodleResourceDownload(
+  material: CourseMaterialActivity,
+  fetchImpl: typeof fetch = fetch,
+): Promise<ResolvedMoodleResource> {
+  let activityOrigin: string;
+  try {
+    activityOrigin = new URL(material.url).origin;
+  } catch {
+    throw new Error(`Invalid Moodle resource URL for activity ${material.cmid}.`);
+  }
+  if (activityOrigin !== MOODLE_ORIGIN) {
+    throw new Error(`Resource ${material.cmid} points outside the UniPD Moodle origin.`);
+  }
+
+  const controller = new AbortController();
+  const response = await fetchImpl(material.url, {
+    method: 'GET',
+    credentials: 'include',
+    redirect: 'follow',
+    signal: controller.signal,
+  });
+
+  if (!response.ok) {
+    controller.abort();
+    throw new Error(
+      `Failed to load Moodle resource ${material.cmid} (HTTP ${response.status}).`,
+    );
+  }
+
+  const finalUrl = response.url || material.url;
+  if (isLoginPageUrl(finalUrl)) {
+    controller.abort();
+    throw new Error('Moodle session expired. Please sign in with UniPD SSO again.');
+  }
+
+  if (!isSameOrigin(finalUrl, MOODLE_ORIGIN)) {
+    controller.abort();
+    throw new Error(`Resource ${material.cmid} redirected outside the UniPD Moodle origin.`);
+  }
+
+  const contentType = (response.headers.get('content-type') ?? '').toLowerCase();
+  if (!isHtmlContentType(contentType)) {
+    const lengthHeader = response.headers.get('content-length');
+    const parsedLen = lengthHeader ? Number.parseInt(lengthHeader, 10) : 0;
+    const sizeBytes = Number.isFinite(parsedLen) && parsedLen > 0 ? parsedLen : 0;
+    const cdFilename = parseContentDispositionFilename(
+      response.headers.get('content-disposition'),
+    );
+
+    // Abort immediately before buffering any binary payload into service worker RAM.
+    controller.abort();
+
+    const safeUrl = validateAllowedMediaUrl(finalUrl, ALLOWED_MEDIA_ORIGINS);
+    const urlBasename = safeDecodePathBasename(safeUrl);
+    const fileName = cdFilename || urlBasename || null;
+    const ext =
+      extractExtensionFromFilename(cdFilename) ||
+      extractExtensionFromFilename(urlBasename) ||
+      inferExtensionFromContentType(contentType) ||
+      (material.fileTypeHint &&
+      !['slides', 'doc', 'sheet', 'archive', 'folder'].includes(material.fileTypeHint)
+        ? material.fileTypeHint
+        : null);
+
+    return {
+      url: safeUrl,
+      fileName,
+      ext,
+      sizeBytes,
+    };
+  }
+
+  const html = await response.text();
+  if (isUnauthenticatedMoodleHtml(html, finalUrl)) {
+    throw new Error('Moodle session expired. Please sign in with UniPD SSO again.');
+  }
+
+  const extracted = extractPluginfileResourceUrl(html, DEFAULT_MOODLE_BASE_URL);
+  if (!extracted) {
+    const cdHeader = response.headers.get('content-disposition');
+    const hasAttachmentDisposition = Boolean(cdHeader && /^\s*attachment\b/i.test(cdHeader));
+    const isDirectPluginfileHtml = /\/pluginfile\.php\//i.test(finalUrl) || hasAttachmentDisposition;
+
+    if (isDirectPluginfileHtml) {
+      const safeUrl = validateAllowedMediaUrl(finalUrl, ALLOWED_MEDIA_ORIGINS);
+      const cdFilename = parseContentDispositionFilename(cdHeader);
+      const urlBasename = safeDecodePathBasename(safeUrl);
+      const fileName = cdFilename || urlBasename || null;
+      const ext =
+        extractExtensionFromFilename(cdFilename) ||
+        extractExtensionFromFilename(urlBasename) ||
+        'html';
+      const lengthHeader = response.headers.get('content-length');
+      const parsedLen = lengthHeader ? Number.parseInt(lengthHeader, 10) : 0;
+      const sizeBytes =
+        Number.isFinite(parsedLen) && parsedLen > 0
+          ? parsedLen
+          : await probeContentLength(safeUrl, fetchImpl);
+
+      return {
+        url: safeUrl,
+        fileName,
+        ext,
+        sizeBytes,
+      };
+    }
+
+    throw new Error(`No downloadable file link found for resource ${material.cmid}.`);
+  }
+
+  const safeUrl = validateAllowedMediaUrl(extracted, ALLOWED_MEDIA_ORIGINS);
+  const urlBasename = safeDecodePathBasename(safeUrl);
+  const ext =
+    extractExtensionFromFilename(urlBasename) ||
+    (material.fileTypeHint &&
+    !['slides', 'doc', 'sheet', 'archive', 'folder'].includes(material.fileTypeHint)
+      ? material.fileTypeHint
+      : null);
+  const sizeBytes = await probeContentLength(safeUrl, fetchImpl);
+
+  return {
+    url: safeUrl,
+    fileName: urlBasename,
+    ext,
+    sizeBytes,
+  };
+}
+
+/**
+ * Lazily resolves the file list of a Moodle `mod_folder` activity on demand,
+ * enforcing `MOODLE_ORIGIN`, `isLoginPageUrl()`, `isSameOrigin()`, and
+ * `isUnauthenticatedMoodleHtml()`.
+ */
+export async function resolveMoodleFolderFiles(
+  material: CourseMaterialActivity,
+  fetchImpl: typeof fetch = fetch,
+): Promise<FolderFileEntry[]> {
+  let activityOrigin: string;
+  try {
+    activityOrigin = new URL(material.url).origin;
+  } catch {
+    throw new Error(`Invalid Moodle folder URL for activity ${material.cmid}.`);
+  }
+  if (activityOrigin !== MOODLE_ORIGIN) {
+    throw new Error(`Folder ${material.cmid} points outside the UniPD Moodle origin.`);
+  }
+
+  const controller = new AbortController();
+  const response = await fetchImpl(material.url, {
+    method: 'GET',
+    credentials: 'include',
+    redirect: 'follow',
+    signal: controller.signal,
+  });
+
+  if (!response.ok) {
+    controller.abort();
+    throw new Error(
+      `Failed to load Moodle folder ${material.cmid} (HTTP ${response.status}).`,
+    );
+  }
+
+  const finalUrl = response.url || material.url;
+  if (isLoginPageUrl(finalUrl)) {
+    controller.abort();
+    throw new Error('Moodle session expired. Please sign in with UniPD SSO again.');
+  }
+
+  if (!isSameOrigin(finalUrl, MOODLE_ORIGIN)) {
+    controller.abort();
+    throw new Error(`Folder ${material.cmid} redirected outside the UniPD Moodle origin.`);
+  }
+
+  const contentType = (response.headers.get('content-type') ?? '').toLowerCase();
+  if (contentType && !isHtmlContentType(contentType)) {
+    controller.abort();
+    throw new Error(`Unexpected non-HTML response for folder ${material.cmid}.`);
+  }
+
+  const html = await response.text();
+  if (isUnauthenticatedMoodleHtml(html, finalUrl)) {
+    throw new Error('Moodle session expired. Please sign in with UniPD SSO again.');
+  }
+
+  return parseFolderFilesFromHtml(html, DEFAULT_MOODLE_BASE_URL);
+}
+
 function selectFlavorForDescriptor(
   flavors: VideoFlavor[],
-  descriptor: DownloadResolutionDescriptor,
+  descriptor: Extract<DownloadResolutionDescriptor, { kind: 'video' | 'subtitle' }>,
 ): VideoFlavor | null {
   if (flavors.length === 0) {
     return null;
@@ -430,7 +731,7 @@ function selectFlavorForDescriptor(
 
 function selectCaptionForDescriptor(
   captions: CaptionTrack[],
-  descriptor: DownloadResolutionDescriptor,
+  descriptor: Extract<DownloadResolutionDescriptor, { kind: 'video' | 'subtitle' }>,
 ): CaptionTrack | null {
   if (captions.length === 0) {
     return null;
@@ -481,13 +782,84 @@ function selectCaptionForDescriptor(
 
 /**
  * Lazily resolves a fresh, allowlist-validated download URL on dequeue from a
- * secret-free `DownloadResolutionDescriptor`. Keeps Kaltura `ks` fresh across
- * MV3 service worker restarts and >1h download batches.
+ * secret-free `DownloadResolutionDescriptor`. Keeps Kaltura `ks` and Moodle
+ * file links fresh across MV3 service worker restarts and >1h download batches.
  */
 export async function resolveDownloadUrlFromDescriptor(
   descriptor: DownloadResolutionDescriptor,
   fetchImpl: typeof fetch = fetch,
-): Promise<string> {
+): Promise<string | ResolvedDownloadTarget> {
+  if (descriptor.kind === 'material') {
+    if (descriptor.material.type === 'folder') {
+      const files = await resolveMoodleFolderFiles(descriptor.material, fetchImpl);
+      const hasIndex = typeof descriptor.folderFileIndex === 'number';
+      const hasExpectedName = Boolean(descriptor.expectedFileName);
+      const target =
+        hasIndex && hasExpectedName
+          ? (files.find(
+              (f) =>
+                f.fileIndex === descriptor.folderFileIndex &&
+                f.name === descriptor.expectedFileName,
+            ) ?? files.find((f) => f.name === descriptor.expectedFileName))
+          : hasExpectedName
+            ? files.find((f) => f.name === descriptor.expectedFileName)
+            : hasIndex
+              ? files.find((f) => f.fileIndex === descriptor.folderFileIndex)
+              : undefined;
+
+      if (!target) {
+        throw new Error('Requested folder file is no longer available.');
+      }
+
+      const safeUrl = validateAllowedMediaUrl(target.url, ALLOWED_MEDIA_ORIGINS);
+      const resolvedFilename = descriptor.pathContext
+        ? buildMaterialDownloadPath({
+            academicYear: descriptor.pathContext.academicYear,
+            courseCode: descriptor.pathContext.courseCode,
+            courseTitle: descriptor.pathContext.courseTitle,
+            sectionIndex: descriptor.material.sectionIndex,
+            sectionTitle: descriptor.material.sectionTitle,
+            activityIndex: descriptor.material.activityIndex,
+            materialTitle: descriptor.material.title,
+            folderName: descriptor.material.title,
+            subPath: target.subPath,
+            fileName: target.name,
+            ext: target.ext,
+          })
+        : descriptor.filename;
+
+      return {
+        url: safeUrl,
+        resolvedFilename,
+      };
+    }
+
+    const resolved = await resolveMoodleResourceDownload(descriptor.material, fetchImpl);
+    let resolvedFilename = descriptor.filename;
+    if (resolved.ext) {
+      if (descriptor.pathContext) {
+        resolvedFilename = buildMaterialDownloadPath({
+          academicYear: descriptor.pathContext.academicYear,
+          courseCode: descriptor.pathContext.courseCode,
+          courseTitle: descriptor.pathContext.courseTitle,
+          sectionIndex: descriptor.material.sectionIndex,
+          sectionTitle: descriptor.material.sectionTitle,
+          activityIndex: descriptor.material.activityIndex,
+          materialTitle: descriptor.material.title || resolved.fileName || 'Material',
+          ext: resolved.ext,
+        });
+      } else {
+        resolvedFilename = replaceFilenameExtension(descriptor.filename, resolved.ext);
+      }
+    }
+
+    return {
+      url: resolved.url,
+      resolvedFilename,
+      resolvedSizeBytes: resolved.sizeBytes,
+    };
+  }
+
   const media = await resolveActivityMedia(descriptor.activity, fetchImpl);
 
   if (descriptor.kind === 'subtitle') {
@@ -571,13 +943,23 @@ export async function handleMessage(
 
     case 'SCAN_COURSE_LECTURES': {
       const html = await fetchCoursePageHtml(DEFAULT_MOODLE_BASE_URL, request.courseId);
-      const sections = parseCourseSectionsFromHtml(html, request.courseId, DEFAULT_MOODLE_BASE_URL);
-      return { ok: true, courseId: request.courseId, sections };
+      const scan = parseCourseContentFromHtml(html, request.courseId, DEFAULT_MOODLE_BASE_URL);
+      return {
+        ok: true,
+        courseId: request.courseId,
+        sections: scan.sections,
+        materialSections: scan.materialSections,
+      };
     }
 
     case 'RESOLVE_LECTURE_MEDIA': {
       const media = await resolveActivityMedia(request.activity);
       return { ok: true, media: toPublicLectureMedia(media) };
+    }
+
+    case 'RESOLVE_FOLDER_FILES': {
+      const files = await resolveMoodleFolderFiles(request.material);
+      return { ok: true, files: toPublicFolderFiles(files) };
     }
 
     case 'ENQUEUE_DOWNLOADS': {

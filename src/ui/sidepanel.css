@@ -412,6 +412,53 @@ input[type='checkbox']:focus-visible {
   font-weight: 600;
 }
 
+.content-tabs {
+  display: flex;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  gap: 4px;
+  border-bottom: 1px solid var(--border);
+  scrollbar-width: none;
+}
+
+.content-tab {
+  position: relative;
+  flex: none;
+  appearance: none;
+  background: transparent;
+  border: none;
+  padding: 7px 12px 9px;
+  min-block-size: 32px;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.content-tab:hover {
+  color: var(--text);
+}
+
+.content-tab[aria-selected='true'] {
+  color: var(--brand);
+}
+
+.content-tab[aria-selected='true']::after {
+  content: '';
+  position: absolute;
+  inset: auto 0 0;
+  border-block-end: 3px solid var(--brand);
+}
+
+.content-tabpanel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-inline-size: 0;
+}
+
 .toolbar {
   display: flex;
   flex-wrap: wrap;
@@ -541,6 +588,47 @@ input[type='checkbox']:focus-visible {
   max-width: 175px;
   padding: 3px 6px;
   font-size: 11.5px;
+}
+
+.material-folder-files {
+  list-style: none;
+  margin: 2px 0 0;
+  padding: 4px 0 0 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  border-top: 1px dashed var(--border);
+}
+
+.material-folder-file-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  min-inline-size: 0;
+}
+
+.material-folder-file-row input[type='checkbox'] {
+  margin-top: 2px;
+  flex-shrink: 0;
+}
+
+.material-folder-file-info {
+  flex: 1;
+  min-inline-size: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+}
+
+.material-folder-file-name {
+  font-size: 12px;
+  word-break: break-word;
+}
+
+.material-subpath {
+  font-size: 11px;
+  color: var(--text-muted);
 }
 
 .action-bar {

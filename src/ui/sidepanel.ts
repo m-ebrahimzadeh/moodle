@@ -1,7 +1,10 @@
 import {
   buildLectureDownloadPath,
+  buildMaterialDownloadPath,
   formatDuration,
   formatFileSize,
+  type CourseMaterialActivity,
+  type CourseMaterialSection,
   type CourseSection,
   type EnrolledCourse,
   type LectureActivity,
@@ -13,6 +16,7 @@ import type {
   ExtensionBroadcastEvent,
   ExtensionRequest,
   ExtensionResponse,
+  PublicFolderFile,
   PublicResolvedLectureMedia,
   PublicSessionStatus,
   PublicVideoFlavor,
@@ -27,6 +31,21 @@ interface LectureUiState {
   error: string | null;
 }
 
+interface MaterialFolderFileUiState {
+  file: PublicFolderFile;
+  selected: boolean;
+}
+
+interface MaterialUiState {
+  material: CourseMaterialActivity;
+  selected: boolean;
+  folderExpanded: boolean;
+  folderLoading: boolean;
+  folderLoaded: boolean;
+  folderError: string | null;
+  folderFiles: MaterialFolderFileUiState[];
+}
+
 interface LectureRowDomRefs {
   rowEl: HTMLLIElement;
   checkbox: HTMLInputElement;
@@ -34,6 +53,16 @@ interface LectureRowDomRefs {
   controlsEl: HTMLDivElement;
   flavorSelect: HTMLSelectElement;
   renderedFlavorSignature: string;
+}
+
+interface MaterialRowDomRefs {
+  rowEl: HTMLLIElement;
+  checkbox: HTMLInputElement;
+  metaEl: HTMLDivElement;
+  expandBtn: HTMLButtonElement | null;
+  filesContainerEl: HTMLDivElement | null;
+  folderFileCheckboxes: Map<number, HTMLInputElement>;
+  renderedFolderFilesSignature: string | null;
 }
 
 interface QueueCardDomRefs {
@@ -52,9 +81,13 @@ const state = {
   selectedAy: 'ALL',
   searchQuery: '',
   selectedCourse: null as EnrolledCourse | null,
+  activeContentTab: 'videos' as 'videos' | 'materials',
   sections: [] as CourseSection[],
+  materialSections: [] as CourseMaterialSection[],
   lecturesByCmid: new Map<number, LectureUiState>(),
+  materialsByCmid: new Map<number, MaterialUiState>(),
   inFlightResolves: new Map<number, Promise<void>>(),
+  inFlightFolderResolves: new Map<number, Promise<void>>(),
   defaultQuality: 'highest' as 'highest' | '1080p' | '720p' | '360p',
   includeVtt: true,
   enqueuing: false,
@@ -71,6 +104,7 @@ const state = {
 };
 
 const lectureRowsByCmid = new Map<number, LectureRowDomRefs>();
+const materialRowsByCmid = new Map<number, MaterialRowDomRefs>();
 const queueCardsById = new Map<string, QueueCardDomRefs>();
 let queueEmptyStateEl: HTMLParagraphElement | null = null;
 
@@ -95,11 +129,18 @@ const dom = {
   lecturesPanel: requireElement<HTMLElement>('lectures-panel'),
   selectedCourseLabel: requireElement<HTMLParagraphElement>('selected-course-label'),
   rescanCourseBtn: requireElement<HTMLButtonElement>('rescan-course-btn'),
+  tabVideos: requireElement<HTMLButtonElement>('tab-videos'),
+  tabMaterials: requireElement<HTMLButtonElement>('tab-materials'),
+  videosTabpanel: requireElement<HTMLDivElement>('videos-tabpanel'),
+  materialsTabpanel: requireElement<HTMLDivElement>('materials-tabpanel'),
   selectAllBtn: requireElement<HTMLButtonElement>('select-all-btn'),
   selectNoneBtn: requireElement<HTMLButtonElement>('select-none-btn'),
   defaultQualitySelect: requireElement<HTMLSelectElement>('default-quality-select'),
   includeVttToggle: requireElement<HTMLInputElement>('include-vtt-toggle'),
   lecturesContainer: requireElement<HTMLDivElement>('lectures-container'),
+  materialsSelectAllBtn: requireElement<HTMLButtonElement>('materials-select-all-btn'),
+  materialsSelectNoneBtn: requireElement<HTMLButtonElement>('materials-select-none-btn'),
+  materialsContainer: requireElement<HTMLDivElement>('materials-container'),
   selectionCount: requireElement<HTMLSpanElement>('selection-count'),
   selectionSize: requireElement<HTMLSpanElement>('selection-size'),
   downloadSelectedBtn: requireElement<HTMLButtonElement>('download-selected-btn'),
@@ -310,23 +351,91 @@ function isEntryDownloadable(entry: LectureUiState): boolean {
   return entry.resolved.flavors.length > 0 || entry.resolved.hasDirectMp4;
 }
 
+const GENERIC_TYPE_HINTS = new Set(['slides', 'doc', 'sheet', 'archive', 'folder']);
+
+function formatMaterialTypeBadge(material: CourseMaterialActivity): string {
+  const hint = material.fileTypeHint?.toLowerCase() ?? '';
+  switch (hint) {
+    case 'pdf':
+      return 'PDF';
+    case 'ppt':
+    case 'pptx':
+    case 'odp':
+    case 'key':
+    case 'slides':
+      return 'Slides';
+    case 'doc':
+    case 'docx':
+    case 'odt':
+    case 'rtf':
+      return 'Doc';
+    case 'xls':
+    case 'xlsx':
+    case 'ods':
+    case 'csv':
+    case 'tsv':
+    case 'sheet':
+      return hint === 'csv' || hint === 'tsv' ? hint.toUpperCase() : 'Sheet';
+    case 'zip':
+    case 'rar':
+    case '7z':
+    case 'tar':
+    case 'gz':
+    case 'tgz':
+    case 'archive':
+      return 'Archive';
+    case 'folder':
+      return 'Folder';
+    default:
+      return hint ? hint.toUpperCase() : 'File';
+  }
+}
+
+function inferInitialMaterialExtension(material: CourseMaterialActivity): string {
+  const hint = material.fileTypeHint?.toLowerCase() ?? '';
+  if (!hint || GENERIC_TYPE_HINTS.has(hint)) {
+    return 'bin';
+  }
+  return hint;
+}
+
+function updateContentTabCounts(): void {
+  const videoCount = state.lecturesByCmid.size;
+  const materialCount = state.materialsByCmid.size;
+  dom.tabVideos.textContent = `Videos (${videoCount})`;
+  dom.tabMaterials.textContent = `Materials (${materialCount})`;
+}
+
+function setActiveContentTab(tab: 'videos' | 'materials'): void {
+  state.activeContentTab = tab;
+  const isVideos = tab === 'videos';
+
+  dom.tabVideos.setAttribute('aria-selected', String(isVideos));
+  dom.tabVideos.tabIndex = isVideos ? 0 : -1;
+  dom.tabMaterials.setAttribute('aria-selected', String(!isVideos));
+  dom.tabMaterials.tabIndex = isVideos ? -1 : 0;
+
+  dom.videosTabpanel.hidden = !isVideos;
+  dom.materialsTabpanel.hidden = isVideos;
+}
+
 function updateSelectionSummary(): void {
-  let selectedCount = 0;
-  let downloadableCount = 0;
-  let unresolvedSelectedCount = 0;
+  let selectedVideoCount = 0;
+  let downloadableVideoCount = 0;
+  let unresolvedVideoCount = 0;
   let totalBytes = 0;
 
   for (const entry of state.lecturesByCmid.values()) {
     if (!entry.selected) {
       continue;
     }
-    selectedCount += 1;
+    selectedVideoCount += 1;
     if (!entry.resolved && !entry.error) {
-      unresolvedSelectedCount += 1;
+      unresolvedVideoCount += 1;
       continue;
     }
     if (isEntryDownloadable(entry)) {
-      downloadableCount += 1;
+      downloadableVideoCount += 1;
       const flavor = getSelectedFlavor(entry);
       if (flavor && flavor.sizeBytes > 0) {
         totalBytes += flavor.sizeBytes;
@@ -334,17 +443,56 @@ function updateSelectionSummary(): void {
     }
   }
 
-  dom.selectionCount.textContent = `${selectedCount} selected`;
-  if (unresolvedSelectedCount > 0) {
-    const sizePrefix = totalBytes > 0 ? `Est. ${formatFileSize(totalBytes)} · ` : '';
-    dom.selectionSize.textContent = `${sizePrefix}Resolving ${unresolvedSelectedCount} selected…`;
-  } else {
-    dom.selectionSize.textContent = totalBytes > 0 ? `Est. ${formatFileSize(totalBytes)}` : '';
+  let selectedMaterialCount = 0;
+  let downloadableMaterialCount = 0;
+  let loadingFolderCount = 0;
+
+  for (const entry of state.materialsByCmid.values()) {
+    if (entry.material.type === 'resource') {
+      if (entry.selected) {
+        selectedMaterialCount += 1;
+        downloadableMaterialCount += 1;
+      }
+      continue;
+    }
+
+    if (entry.folderLoaded) {
+      for (const fileEntry of entry.folderFiles) {
+        if (fileEntry.selected) {
+          selectedMaterialCount += 1;
+          downloadableMaterialCount += 1;
+        }
+      }
+    } else if (entry.selected) {
+      selectedMaterialCount += 1;
+      if (entry.folderLoading || !entry.folderError) {
+        loadingFolderCount += 1;
+      }
+    }
   }
+
+  const totalSelectedCount = selectedVideoCount + selectedMaterialCount;
+  const unresolvedTotal = unresolvedVideoCount + loadingFolderCount;
+  const downloadableTotal = downloadableVideoCount + downloadableMaterialCount;
+
+  dom.selectionCount.textContent = `${totalSelectedCount} selected`;
+  const parts: string[] = [];
+  if (totalBytes > 0) {
+    parts.push(`Est. ${formatFileSize(totalBytes)}`);
+  }
+  if (downloadableMaterialCount > 0) {
+    parts.push(
+      `${downloadableMaterialCount} material${downloadableMaterialCount === 1 ? '' : 's'}`,
+    );
+  }
+  if (unresolvedTotal > 0) {
+    parts.push(`Resolving ${unresolvedTotal} selected…`);
+  }
+  dom.selectionSize.textContent = parts.join(' · ');
 
   dom.downloadSelectedBtn.textContent = state.enqueuing ? 'Queuing…' : 'Download Selected';
   dom.downloadSelectedBtn.disabled =
-    state.enqueuing || unresolvedSelectedCount > 0 || downloadableCount === 0;
+    state.enqueuing || unresolvedTotal > 0 || downloadableTotal === 0;
 }
 
 function updateLectureRow(cmid: number): void {
@@ -566,6 +714,345 @@ function renderLecturesStructure(): void {
   updateSelectionSummary();
 }
 
+function updateMaterialRow(cmid: number): void {
+  const refs = materialRowsByCmid.get(cmid);
+  const entry = state.materialsByCmid.get(cmid);
+  if (!refs || !entry) {
+    return;
+  }
+
+  const { material } = entry;
+  if (material.type === 'resource') {
+    refs.checkbox.checked = entry.selected;
+    refs.checkbox.indeterminate = false;
+    refs.checkbox.disabled = false;
+
+    const metaNodes: Node[] = [];
+    const typeBadge = document.createElement('span');
+    typeBadge.className = 'badge';
+    typeBadge.textContent = formatMaterialTypeBadge(material);
+    metaNodes.push(typeBadge);
+
+    if (material.detailsText) {
+      const details = document.createElement('span');
+      details.textContent = material.detailsText;
+      metaNodes.push(details);
+    }
+
+    refs.metaEl.replaceChildren(...metaNodes);
+    return;
+  }
+
+  // mod_folder row
+  if (entry.folderLoaded) {
+    const selectedFiles = entry.folderFiles.filter((f) => f.selected).length;
+    const totalFiles = entry.folderFiles.length;
+    refs.checkbox.checked = totalFiles > 0 && selectedFiles === totalFiles;
+    refs.checkbox.indeterminate = selectedFiles > 0 && selectedFiles < totalFiles;
+    refs.checkbox.disabled = totalFiles === 0;
+    entry.selected = refs.checkbox.checked;
+  } else {
+    refs.checkbox.checked = entry.selected;
+    refs.checkbox.indeterminate = false;
+    refs.checkbox.disabled = entry.folderError !== null;
+  }
+
+  const metaNodes: Node[] = [];
+  const folderBadge = document.createElement('span');
+  folderBadge.className = 'badge';
+  folderBadge.textContent = entry.folderLoaded
+    ? `Folder · ${entry.folderFiles.length} file${entry.folderFiles.length === 1 ? '' : 's'}`
+    : 'Folder';
+  metaNodes.push(folderBadge);
+
+  if (entry.folderLoading) {
+    refs.checkbox.removeAttribute('aria-describedby');
+    refs.expandBtn?.removeAttribute('aria-describedby');
+    const loading = document.createElement('span');
+    loading.textContent = 'Loading files…';
+    metaNodes.push(loading);
+  } else if (entry.folderError) {
+    const errId = `folder-err-${material.cmid}`;
+    const errSpan = document.createElement('span');
+    errSpan.id = errId;
+    errSpan.className = 'badge badge-err';
+    errSpan.textContent = entry.folderError;
+    metaNodes.push(errSpan);
+    refs.checkbox.setAttribute('aria-describedby', errId);
+    refs.expandBtn?.setAttribute('aria-describedby', errId);
+
+    const retryBtn = document.createElement('button');
+    retryBtn.type = 'button';
+    retryBtn.className = 'btn btn-sm';
+    retryBtn.textContent = 'Retry';
+    retryBtn.setAttribute('aria-label', `Retry loading ${material.title}`);
+    retryBtn.addEventListener('click', () => {
+      entry.folderError = null;
+      void loadFolderFiles(entry, state.scanGeneration, { selectAllOnLoad: entry.selected });
+    });
+    metaNodes.push(retryBtn);
+  } else {
+    refs.checkbox.removeAttribute('aria-describedby');
+    refs.expandBtn?.removeAttribute('aria-describedby');
+    if (material.detailsText) {
+      const details = document.createElement('span');
+      details.textContent = material.detailsText;
+      metaNodes.push(details);
+    }
+  }
+  refs.metaEl.replaceChildren(...metaNodes);
+
+  if (refs.expandBtn) {
+    refs.expandBtn.disabled = entry.folderLoading;
+    refs.expandBtn.setAttribute('aria-expanded', String(entry.folderExpanded));
+    if (!entry.folderLoaded) {
+      refs.expandBtn.textContent = entry.folderLoading ? 'Loading…' : 'Load files';
+      refs.expandBtn.setAttribute('aria-label', `Load files for ${material.title}`);
+    } else if (entry.folderExpanded) {
+      refs.expandBtn.textContent = 'Hide files';
+      refs.expandBtn.setAttribute('aria-label', `Hide files for ${material.title}`);
+    } else {
+      refs.expandBtn.textContent = 'Show files';
+      refs.expandBtn.setAttribute('aria-label', `Show files for ${material.title}`);
+    }
+  }
+
+  if (refs.filesContainerEl) {
+    if (!entry.folderLoaded) {
+      refs.filesContainerEl.hidden = true;
+      if (refs.renderedFolderFilesSignature !== null) {
+        refs.filesContainerEl.replaceChildren();
+        refs.folderFileCheckboxes.clear();
+        refs.renderedFolderFilesSignature = null;
+      }
+    } else if (!entry.folderExpanded) {
+      refs.filesContainerEl.hidden = true;
+    } else {
+      refs.filesContainerEl.hidden = false;
+      if (entry.folderFiles.length === 0) {
+        if (refs.renderedFolderFilesSignature !== '__EMPTY__') {
+          const empty = document.createElement('p');
+          empty.className = 'muted-caption';
+          empty.textContent = 'No downloadable files found in this folder.';
+          refs.filesContainerEl.replaceChildren(empty);
+          refs.folderFileCheckboxes.clear();
+          refs.renderedFolderFilesSignature = '__EMPTY__';
+        }
+      } else {
+        const signature = entry.folderFiles
+          .map(
+            (f) =>
+              `${f.file.fileIndex}\0${f.file.name}\0${f.file.ext}\0${f.file.subPath.join('/')}`,
+          )
+          .join('\n');
+
+        if (refs.renderedFolderFilesSignature !== signature) {
+          const fileList = document.createElement('ul');
+          fileList.className = 'material-folder-files';
+          refs.folderFileCheckboxes.clear();
+
+          for (const fileEntry of entry.folderFiles) {
+            const itemLi = document.createElement('li');
+            itemLi.className = 'material-folder-file-row';
+
+            const chk = document.createElement('input');
+            chk.type = 'checkbox';
+            chk.id = `folder-file-chk-${material.cmid}-${fileEntry.file.fileIndex}`;
+            chk.checked = fileEntry.selected;
+            chk.addEventListener('change', () => {
+              fileEntry.selected = chk.checked;
+              updateMaterialRow(material.cmid);
+              updateSelectionSummary();
+            });
+            refs.folderFileCheckboxes.set(fileEntry.file.fileIndex, chk);
+
+            const fileInfo = document.createElement('div');
+            fileInfo.className = 'material-folder-file-info';
+
+            const label = document.createElement('label');
+            label.className = 'material-folder-file-name';
+            label.htmlFor = chk.id;
+            label.textContent = fileEntry.file.name;
+            fileInfo.appendChild(label);
+
+            if (fileEntry.file.subPath.length > 0) {
+              const subSpan = document.createElement('span');
+              subSpan.className = 'material-subpath';
+              subSpan.textContent = fileEntry.file.subPath.join(' / ');
+              fileInfo.appendChild(subSpan);
+            }
+
+            const extBadge = document.createElement('span');
+            extBadge.className = 'badge';
+            extBadge.textContent = `.${fileEntry.file.ext}`;
+            fileInfo.appendChild(extBadge);
+
+            itemLi.append(chk, fileInfo);
+            fileList.appendChild(itemLi);
+          }
+
+          refs.filesContainerEl.replaceChildren(fileList);
+          refs.renderedFolderFilesSignature = signature;
+        } else {
+          for (const fileEntry of entry.folderFiles) {
+            const chk = refs.folderFileCheckboxes.get(fileEntry.file.fileIndex);
+            if (chk && chk.checked !== fileEntry.selected) {
+              chk.checked = fileEntry.selected;
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+function renderMaterialsStructure(): void {
+  dom.materialsContainer.replaceChildren();
+  materialRowsByCmid.clear();
+
+  if (!state.selectedCourse) {
+    updateContentTabCounts();
+    updateSelectionSummary();
+    return;
+  }
+
+  updateContentTabCounts();
+
+  if (state.materialSections.length === 0) {
+    const p = document.createElement('p');
+    p.className = 'empty-state';
+    p.textContent = 'No static course materials (PDFs, slides, folders) found in this course.';
+    dom.materialsContainer.appendChild(p);
+    updateSelectionSummary();
+    return;
+  }
+
+  for (const section of state.materialSections) {
+    const group = document.createElement('div');
+    group.className = 'section-group';
+
+    const header = document.createElement('div');
+    header.className = 'section-header';
+
+    const secTitle = document.createElement('span');
+    secTitle.textContent = `${String(section.sectionIndex).padStart(2, '0')} · ${section.title}`;
+
+    const secCount = document.createElement('span');
+    secCount.className = 'badge';
+    secCount.textContent = `${section.materials.length}`;
+
+    header.append(secTitle, secCount);
+    group.appendChild(header);
+
+    const list = document.createElement('ul');
+    list.className = 'lecture-list';
+
+    for (const material of section.materials) {
+      const entry = state.materialsByCmid.get(material.cmid);
+      if (!entry) {
+        continue;
+      }
+
+      const li = document.createElement('li');
+      li.className = 'lecture-row';
+
+      const mainRow = document.createElement('div');
+      mainRow.className = 'lecture-main';
+
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.id = `material-chk-${material.cmid}`;
+      checkbox.addEventListener('change', () => {
+        if (material.type === 'resource') {
+          entry.selected = checkbox.checked;
+          updateSelectionSummary();
+          return;
+        }
+
+        entry.selected = checkbox.checked;
+        if (entry.folderLoaded) {
+          for (const f of entry.folderFiles) {
+            f.selected = checkbox.checked;
+          }
+          updateMaterialRow(material.cmid);
+          updateSelectionSummary();
+        } else if (checkbox.checked) {
+          entry.folderExpanded = true;
+          updateMaterialRow(material.cmid);
+          updateSelectionSummary();
+          void loadFolderFiles(entry, state.scanGeneration, { selectAllOnLoad: true });
+        } else {
+          updateMaterialRow(material.cmid);
+          updateSelectionSummary();
+        }
+      });
+
+      const info = document.createElement('div');
+      info.className = 'lecture-info';
+
+      const titleLabel = document.createElement('label');
+      titleLabel.className = 'lecture-title';
+      titleLabel.htmlFor = checkbox.id;
+      titleLabel.textContent = material.title;
+
+      const metaEl = document.createElement('div');
+      metaEl.className = 'lecture-meta';
+
+      info.append(titleLabel, metaEl);
+      mainRow.append(checkbox, info);
+
+      let expandBtn: HTMLButtonElement | null = null;
+      let filesContainerEl: HTMLDivElement | null = null;
+
+      if (material.type === 'folder') {
+        const filesContainerId = `folder-files-${material.cmid}`;
+        expandBtn = document.createElement('button');
+        expandBtn.type = 'button';
+        expandBtn.className = 'btn btn-ghost btn-sm';
+        expandBtn.setAttribute('aria-controls', filesContainerId);
+        expandBtn.addEventListener('click', () => {
+          if (!entry.folderLoaded && !entry.folderLoading) {
+            entry.folderExpanded = true;
+            entry.folderError = null;
+            updateMaterialRow(material.cmid);
+            void loadFolderFiles(entry, state.scanGeneration, { selectAllOnLoad: entry.selected });
+          } else {
+            entry.folderExpanded = !entry.folderExpanded;
+            updateMaterialRow(material.cmid);
+          }
+        });
+        mainRow.appendChild(expandBtn);
+
+        filesContainerEl = document.createElement('div');
+        filesContainerEl.id = filesContainerId;
+        filesContainerEl.hidden = true;
+      }
+
+      li.appendChild(mainRow);
+      if (filesContainerEl) {
+        li.appendChild(filesContainerEl);
+      }
+      list.appendChild(li);
+
+      materialRowsByCmid.set(material.cmid, {
+        rowEl: li,
+        checkbox,
+        metaEl,
+        expandBtn,
+        filesContainerEl,
+        folderFileCheckboxes: new Map(),
+        renderedFolderFilesSignature: null,
+      });
+      updateMaterialRow(material.cmid);
+    }
+
+    group.appendChild(list);
+    dom.materialsContainer.appendChild(group);
+  }
+
+  updateSelectionSummary();
+}
+
 function createQueueCard(item: DownloadQueueItem): QueueCardDomRefs {
   const cardEl = document.createElement('div');
   cardEl.className = 'queue-item';
@@ -618,6 +1105,19 @@ function createQueueCard(item: DownloadQueueItem): QueueCardDomRefs {
   };
 }
 
+function getQueueExtensionTag(item: DownloadQueueItem): string {
+  if (item.kind === 'subtitle') {
+    return '.vtt';
+  }
+  const base = item.filename.split('/').pop() ?? item.filename;
+  const dotIdx = base.lastIndexOf('.');
+  if (dotIdx > 0 && dotIdx < base.length - 1) {
+    const ext = base.slice(dotIdx).toLowerCase();
+    return ext === '.bin' && item.kind === 'material' ? 'file' : ext;
+  }
+  return item.kind === 'video' ? '.mp4' : 'file';
+}
+
 function updateQueueCard(refs: QueueCardDomRefs, item: DownloadQueueItem): void {
   if (refs.filenameEl.textContent !== item.filename) {
     refs.filenameEl.textContent = item.filename;
@@ -647,7 +1147,7 @@ function updateQueueCard(refs: QueueCardDomRefs, item: DownloadQueueItem): void 
     refs.progressEl.hidden = true;
   }
 
-  const kindTag = item.kind === 'subtitle' ? '.vtt' : '.mp4';
+  const kindTag = getQueueExtensionTag(item);
   if (item.totalBytes > 0) {
     const receivedLabel = item.bytesReceived > 0 ? formatFileSize(item.bytesReceived) : '0 B';
     refs.bytesTextEl.textContent = `${kindTag} · ${receivedLabel} / ${formatFileSize(item.totalBytes)}`;
@@ -846,23 +1346,105 @@ async function resolveLecturesBounded(
   await Promise.all(workers);
 }
 
+function loadFolderFiles(
+  entry: MaterialUiState,
+  generation: number,
+  options: { selectAllOnLoad: boolean } = { selectAllOnLoad: false },
+): Promise<void> {
+  if (entry.folderLoaded) {
+    if (options.selectAllOnLoad) {
+      for (const f of entry.folderFiles) {
+        f.selected = true;
+      }
+      updateMaterialRow(entry.material.cmid);
+      updateSelectionSummary();
+    }
+    return Promise.resolve();
+  }
+
+  const existing = state.inFlightFolderResolves.get(entry.material.cmid);
+  if (existing) {
+    return existing;
+  }
+
+  let promise: Promise<void> | undefined;
+  promise = (async () => {
+    entry.folderLoading = true;
+    entry.folderError = null;
+    updateMaterialRow(entry.material.cmid);
+    updateSelectionSummary();
+
+    try {
+      const res = await sendExtensionMessage({
+        type: 'RESOLVE_FOLDER_FILES',
+        material: entry.material,
+      });
+      if (state.scanGeneration !== generation) {
+        return;
+      }
+      const selectAll = entry.selected;
+      entry.folderFiles = res.files.map((file) => ({
+        file,
+        selected: selectAll,
+      }));
+      entry.folderLoaded = true;
+      entry.folderLoading = false;
+      if (entry.folderFiles.length === 0) {
+        entry.selected = false;
+      }
+    } catch (err) {
+      if (state.scanGeneration !== generation) {
+        return;
+      }
+      entry.folderLoading = false;
+      entry.selected = false;
+      entry.folderError = err instanceof Error ? err.message : 'Failed to load folder files';
+    } finally {
+      if (promise && state.inFlightFolderResolves.get(entry.material.cmid) === promise) {
+        state.inFlightFolderResolves.delete(entry.material.cmid);
+      }
+    }
+
+    if (state.scanGeneration === generation) {
+      updateMaterialRow(entry.material.cmid);
+      updateSelectionSummary();
+    }
+  })();
+
+  state.inFlightFolderResolves.set(entry.material.cmid, promise);
+  return promise;
+}
+
 async function selectCourse(course: EnrolledCourse): Promise<void> {
   showAlert(null);
   state.selectedCourse = course;
   state.sections = [];
+  state.materialSections = [];
   state.lecturesByCmid.clear();
+  state.materialsByCmid.clear();
   state.inFlightResolves.clear();
+  state.inFlightFolderResolves.clear();
   lectureRowsByCmid.clear();
+  materialRowsByCmid.clear();
   const generation = ++state.scanGeneration;
 
   renderCourseList();
   dom.lecturesPanel.hidden = false;
   dom.selectedCourseLabel.textContent = `${course.courseCode ? `${course.courseCode} — ` : ''}${course.title}`;
+  updateContentTabCounts();
+
   dom.lecturesContainer.replaceChildren();
   const loading = document.createElement('p');
   loading.className = 'empty-state';
-  loading.textContent = 'Scanning course sections for lectures…';
+  loading.textContent = 'Scanning course sections for lectures and materials…';
   dom.lecturesContainer.appendChild(loading);
+
+  dom.materialsContainer.replaceChildren();
+  const matLoading = document.createElement('p');
+  matLoading.className = 'empty-state';
+  matLoading.textContent = 'Scanning course sections for static materials…';
+  dom.materialsContainer.appendChild(matLoading);
+
   updateSelectionSummary();
 
   try {
@@ -875,6 +1457,8 @@ async function selectCourse(course: EnrolledCourse): Promise<void> {
     }
 
     state.sections = res.sections;
+    state.materialSections = res.materialSections ?? [];
+
     const allActivities: LectureActivity[] = [];
     for (const section of res.sections) {
       for (const activity of section.activities) {
@@ -890,7 +1474,28 @@ async function selectCourse(course: EnrolledCourse): Promise<void> {
       }
     }
 
+    for (const section of state.materialSections) {
+      for (const material of section.materials) {
+        state.materialsByCmid.set(material.cmid, {
+          material,
+          selected: false,
+          folderExpanded: false,
+          folderLoading: false,
+          folderLoaded: false,
+          folderError: null,
+          folderFiles: [],
+        });
+      }
+    }
+
+    if (allActivities.length === 0 && state.materialsByCmid.size > 0) {
+      setActiveContentTab('materials');
+    } else if (allActivities.length > 0 && state.materialsByCmid.size === 0) {
+      setActiveContentTab('videos');
+    }
+
     renderLecturesStructure();
+    renderMaterialsStructure();
     if (allActivities.length > 0) {
       await resolveLecturesBounded(allActivities, generation);
     }
@@ -898,8 +1503,9 @@ async function selectCourse(course: EnrolledCourse): Promise<void> {
     if (state.scanGeneration !== generation) {
       return;
     }
-    showAlert(err instanceof Error ? err.message : 'Failed to scan course lectures.');
+    showAlert(err instanceof Error ? err.message : 'Failed to scan course content.');
     renderLecturesStructure();
+    renderMaterialsStructure();
   }
 }
 
@@ -926,6 +1532,28 @@ async function enqueueSelectedDownloads(): Promise<void> {
     if (pendingSelected.length > 0) {
       await Promise.all(
         pendingSelected.map((entry) => resolveSingleLecture(entry, generation)),
+      );
+      if (state.scanGeneration !== generation) {
+        return;
+      }
+    }
+
+    const pendingFolders: MaterialUiState[] = [];
+    for (const entry of state.materialsByCmid.values()) {
+      if (
+        entry.material.type === 'folder' &&
+        entry.selected &&
+        !entry.folderLoaded &&
+        !entry.folderError
+      ) {
+        pendingFolders.push(entry);
+      }
+    }
+    if (pendingFolders.length > 0) {
+      await Promise.all(
+        pendingFolders.map((entry) =>
+          loadFolderFiles(entry, generation, { selectAllOnLoad: true }),
+        ),
       );
       if (state.scanGeneration !== generation) {
         return;
@@ -1042,6 +1670,93 @@ async function enqueueSelectedDownloads(): Promise<void> {
       );
     }
 
+    for (const section of state.materialSections) {
+      for (const material of section.materials) {
+        const entry = state.materialsByCmid.get(material.cmid);
+        if (!entry) {
+          continue;
+        }
+
+        if (material.type === 'resource') {
+          if (!entry.selected) {
+            continue;
+          }
+          const initialExt = inferInitialMaterialExtension(material);
+          const materialPath = buildMaterialDownloadPath({
+            academicYear: course.academicYear,
+            courseCode: course.courseCode,
+            courseTitle: course.title,
+            sectionIndex: section.sectionIndex,
+            sectionTitle: section.title,
+            activityIndex: material.activityIndex,
+            materialTitle: material.title,
+            ext: initialExt,
+          });
+
+          items.push({
+            cmid: material.cmid,
+            courseId: course.id,
+            lectureTitle: material.title,
+            filename: materialPath,
+            kind: 'material',
+            descriptor: {
+              kind: 'material',
+              material,
+              filename: materialPath,
+              pathContext: {
+                academicYear: course.academicYear,
+                courseCode: course.courseCode,
+                courseTitle: course.title,
+              },
+            },
+          });
+          continue;
+        }
+
+        if (!entry.folderLoaded) {
+          continue;
+        }
+        for (const fileEntry of entry.folderFiles) {
+          if (!fileEntry.selected) {
+            continue;
+          }
+          const folderFilePath = buildMaterialDownloadPath({
+            academicYear: course.academicYear,
+            courseCode: course.courseCode,
+            courseTitle: course.title,
+            sectionIndex: section.sectionIndex,
+            sectionTitle: section.title,
+            activityIndex: material.activityIndex,
+            materialTitle: material.title,
+            folderName: material.title,
+            subPath: fileEntry.file.subPath,
+            fileName: fileEntry.file.name,
+            ext: fileEntry.file.ext,
+          });
+
+          items.push({
+            cmid: material.cmid,
+            courseId: course.id,
+            lectureTitle: `${material.title} / ${fileEntry.file.name}`,
+            filename: folderFilePath,
+            kind: 'material',
+            descriptor: {
+              kind: 'material',
+              material,
+              filename: folderFilePath,
+              folderFileIndex: fileEntry.file.fileIndex,
+              expectedFileName: fileEntry.file.name,
+              pathContext: {
+                academicYear: course.academicYear,
+                courseCode: course.courseCode,
+                courseTitle: course.title,
+              },
+            },
+          });
+        }
+      }
+    }
+
     if (items.length === 0) {
       return;
     }
@@ -1083,10 +1798,14 @@ function loadSessionAndCourses(): Promise<void> {
         state.courses = [];
         state.selectedCourse = null;
         state.sections = [];
+        state.materialSections = [];
         state.lecturesByCmid.clear();
+        state.materialsByCmid.clear();
         state.inFlightResolves.clear();
+        state.inFlightFolderResolves.clear();
         populateAcademicYearFilter();
         renderLecturesStructure();
+        renderMaterialsStructure();
       }
 
       renderCourseList();
@@ -1142,6 +1861,69 @@ function wireEvents(): void {
     if (state.selectedCourse) {
       void selectCourse(state.selectedCourse);
     }
+  });
+
+  const handleTabKeydown = (event: KeyboardEvent) => {
+    if (
+      event.key !== 'ArrowLeft' &&
+      event.key !== 'ArrowRight' &&
+      event.key !== 'Home' &&
+      event.key !== 'End'
+    ) {
+      return;
+    }
+    event.preventDefault();
+    const nextTab: 'videos' | 'materials' =
+      event.key === 'Home'
+        ? 'videos'
+        : event.key === 'End'
+          ? 'materials'
+          : state.activeContentTab === 'videos'
+            ? 'materials'
+            : 'videos';
+    setActiveContentTab(nextTab);
+    (nextTab === 'videos' ? dom.tabVideos : dom.tabMaterials).focus();
+  };
+
+  dom.tabVideos.addEventListener('click', () => {
+    setActiveContentTab('videos');
+  });
+  dom.tabMaterials.addEventListener('click', () => {
+    setActiveContentTab('materials');
+  });
+  dom.tabVideos.addEventListener('keydown', handleTabKeydown);
+  dom.tabMaterials.addEventListener('keydown', handleTabKeydown);
+
+  dom.materialsSelectAllBtn.addEventListener('click', () => {
+    for (const [cmid, entry] of state.materialsByCmid.entries()) {
+      if (entry.material.type === 'resource') {
+        entry.selected = true;
+        updateMaterialRow(cmid);
+      } else if (entry.folderLoaded) {
+        entry.selected = entry.folderFiles.length > 0;
+        for (const f of entry.folderFiles) {
+          f.selected = true;
+        }
+        updateMaterialRow(cmid);
+      } else if (!entry.folderError) {
+        entry.selected = true;
+        entry.folderExpanded = true;
+        updateMaterialRow(cmid);
+        void loadFolderFiles(entry, state.scanGeneration, { selectAllOnLoad: true });
+      }
+    }
+    updateSelectionSummary();
+  });
+
+  dom.materialsSelectNoneBtn.addEventListener('click', () => {
+    for (const [cmid, entry] of state.materialsByCmid.entries()) {
+      entry.selected = false;
+      for (const f of entry.folderFiles) {
+        f.selected = false;
+      }
+      updateMaterialRow(cmid);
+    }
+    updateSelectionSummary();
   });
 
   dom.selectAllBtn.addEventListener('click', () => {
