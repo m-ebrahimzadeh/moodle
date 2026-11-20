@@ -3,7 +3,7 @@
 > Generated deterministically by `bin/uesf.mjs sync-snapshot` per `policies/SOURCE_OF_TRUTH_POLICY.md` (`DEC-023`, `DEC-026`).
 > * **Canonical Control Plane**: `.uesf/`
 > * **Snapshot Version**: `0.1.1`
-> * **Source-Ledger-SHA256**: `c9de6fe04f9278ab79506a4611bcaf10ea76732dbdbbfb8d91b46fc1b632fad7` (`c9de6fe04f92`)
+> * **Source-Ledger-SHA256**: `765347940c0493072daa074a5a9d8de6e8e1f8ea18610f66435c37bb1a8e7f24` (`765347940c04`)
 > * **Last Ledger Update**: `2026-11-20`
 
 ## 1. Empirically Verified Repository Facts (`[VERIFIED_BY_GIT_AND_FS_PROBE]`)
@@ -12,7 +12,7 @@
 * **Missing Registered Files on Disk**: `0`
 * **Unindexed Canonical Markdown Files on Disk**: `0`
 * **Header-to-Registry Version Mismatches**: `0`
-* **Total Recorded Tasks (`ACCEPTED` / Total)**: `6 / 8`
+* **Total Recorded Tasks (`ACCEPTED` / Total)**: `7 / 8`
 * **Total Recorded Decisions (`DEC-*`)**: `5`
 * **Unresolved Open Questions (`OQ-*`)**: `0`
 
@@ -104,11 +104,11 @@ Covers all project work executed under UESF `Fast-Path` and `Standard-Contract` 
 | `TASK-004` | Adjudicate `KDP-001` & Patch `.uesf/bin/uesf.mjs` `walkMdFiles()` Dependency/Build Exclusions (`Fast-Path`) | DevOps | QA / CTO | Local Repository (`moodle`) | `A2` | `ACCEPTED` | `DEC-004` (`2026-11-20`): patched `.uesf/bin/uesf.mjs` `walkMdFiles()` (`ALWAYS_SKIP_DIRS` + `BUILD_ARTIFACT_DIRS`); independently verified (`PASS`) by isolated QA session (`922a963e-c85c-4bf8-ac34-6b72ce805625`) — two consecutive `sync-snapshot` runs exited `0` with identical SHA256 (`IDEMPOTENT=True`) and `Drift Audit Verdict: CLEAN (0 discrepancies)`. |
 | `TASK-005` | Configure GitHub Actions CI Pipeline & Commit `OQ-001`/`DEC-005` Governance Baseline (`Fast-Path`) | DevOps | QA | Local Repository (`moodle`) | `A2` | `ACCEPTED` | `426d650` (`HO-TASK-005-02.md` / `EV-TASK-005-01`): independently verified (`PASS`) by Tier 1 QA (`f143e8aa`, `A0`) across all 4 acceptance criteria — `.github/workflows/ci.yml` (`contents: read`, `checkout@v4`, `setup-node@v4` Node 22/npm, `npm ci`, `typecheck`, `test` `59/59`, `build` `63` modules, static `dist/` & `src/ui/` checks, `sync-snapshot` `CLEAN` + `git diff --exit-code`), `OQ-001`/`DEC-005`/`MOODLE-DOC-006` baseline committed, `0` changes to `src/`/`tests/`/`public/`/`package.json`, `.env` gitignored. |
 | `TASK-006` | Phase 2A: Implement Static Course Materials (`mod_resource` & `mod_folder`), Lazy Resolvers & Side Panel Content Tabs (`v0.2.0`) | Developer | QA / Architect | Local Repository (`moodle`) | `A1` | `ACCEPTED` | Accepted by CTO & Human Stakeholder (`2026-11-20`, `HO-TASK-006-05.md`) following Round 2 Tier 2 re-verification on rebased Phase 2A (`9f80910` + `aee2afe`): Independent Architect (`68ca0879`, `CONFORMANT`), Independent QA (`57e13214`, `PASS`: `tsc --noEmit` `0`, `82/82` Vitest tests, `vite build` `63` modules, `npm audit` `0`, `0`-diff `public/manifest.json`), and Live Chrome `158.0.8127.36` E2E (`c2f818ee`, `PASS`: Shibboleth SSO `24` courses, `0` `mod_subsection` dupes across 5 course entries / `164` materials, `"Are Emotions Natural Kinds?.pdf"` `.pdf` badge & `368,991 B` `%PDF-` download, keyboard `ArrowRight` & `Space` DOM-node reuse focus retention, zero-secret storage). |
-| `TASK-007` | Phase 2B: UX Persistence, Secret-Free Download History Badge, Queue Retry & HLS-Only Diagnostics (`v0.2.0`) | Developer | QA / Architect | Local Repository (`moodle`) | `A1` | `PROPOSED` | Sequenced after `TASK-006` acceptance (`DEC-005`, `docs/architecture/02-phase2-v0.2.0-blueprint.md` §4). |
+| `TASK-007` | Phase 2B: UX Persistence, Secret-Free Download History Badge, Queue Retry & HLS-Only Diagnostics (`v0.2.0`) | Developer | QA / Architect | Local Repository (`moodle`) | `A1` | `ACCEPTED` | Accepted by CTO & Human Stakeholder (`2026-11-20`, `HO-TASK-007-03.md`) on hardened commit `c4ffd60` following independent Tier 2 verification: Independent Architect (`80e3e610`, `CONFORMANT`, `0 CRITICAL`/`0 HIGH`/`0 MEDIUM` after monotonic `attemptId` guard verified in `942d7f8..c4ffd60`), Independent QA (`62c9b7de`, `PASS_WITH_FINDINGS`, `0` Critical/High/Medium: `tsc --noEmit` `0`, `91/91` Vitest tests across `8` files, `vite build` `64` modules, CI static `dist/` checks exit `0`, `0` `npm audit` vulns, `0`-diff `public/manifest.json` & `package.json`, `CLEAN` snapshot), and Live Authenticated Chrome `158.0.8127.36` E2E (`8c2859e4`, `PASS`: `5/5` scenarios on `942d7f8` against `psico.elearning.unipd.it`, `%PDF-1.4` & MP4 `ftypisom` verified on disk, DOM focus stability across `DOWNLOAD_HISTORY_UPDATED`, `0` console/SW errors, `0` secrets/PII in storage; `0`-diff `src/ui/` & `src/core/` in `942d7f8..c4ffd60`). |
 | `TASK-008` | Phase 2C: `local_kalturamediagallery` (`media19.elearning.unipd.it`) Live `A0` Investigation Spike & Optional Supplement | Architect / Developer | CTO / QA | Local Repository (`moodle`) | `A0` | `PROPOSED` | Sequenced after `TASK-007` (`DEC-005`); `A0` read-only LTI/KAF feasibility spike required prior to any `optional_host_permissions` (`A3`) contract. |
 
 ## 5. Active Outbound Task Queue
-* *(None currently dispatched — `TASK-001` through `TASK-006` are `ACCEPTED` on `main`. Next planned Phase 2 work: `TASK-007` (`PROPOSED`) & `TASK-008` (`PROPOSED`) per `DEC-005` / `docs/architecture/02-phase2-v0.2.0-blueprint.md`.)*
+* None (`TASK-007` accepted and merged; `TASK-008` remains `PROPOSED` awaiting authorization).
 
 ### 2.3 Architectural & Governance Decisions (`.uesf/DECISION_LOG.md`)
 # Architectural & Governance Decision Log
@@ -183,4 +183,4 @@ Covers all tracked Markdown documents in the `moodle` repository (`README.md`, `
 
 ## 3. Automated Discrepancy & Drift Audit (`[DRIFT_CHECK]`)
 * **Drift Audit Verdict**: `CLEAN (0 discrepancies between canonical ledgers and on-disk specification tree)`
-* **Cloud / Remote Session Note**: When reading this file remotely without local `CAP-FS`/`CAP-GIT`, treat Section 1 as verified at the time of the commit that produced `Source-Ledger-SHA256: c9de6fe04f92`, treat Section 2 as `[REPORTED — Remote Ledger]`, and treat any uncommitted local working-tree edits as `[UNKNOWN — Local FS Unavailable]`.
+* **Cloud / Remote Session Note**: When reading this file remotely without local `CAP-FS`/`CAP-GIT`, treat Section 1 as verified at the time of the commit that produced `Source-Ledger-SHA256: 765347940c04`, treat Section 2 as `[REPORTED — Remote Ledger]`, and treat any uncommitted local working-tree edits as `[UNKNOWN — Local FS Unavailable]`.

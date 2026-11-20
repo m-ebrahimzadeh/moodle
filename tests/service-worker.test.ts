@@ -1,8 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { CourseMaterialActivity, LectureActivity } from '../src/core/types.js';
 import {
+  buildHistoryKeyFromDescriptor,
   handleMessage,
   isMoodlePostLoginUrl,
+  readDownloadHistory,
+  recordCompletedDownloadHistory,
   resolveActivityMedia,
   resolveDownloadUrlFromDescriptor,
   resolveMoodleFolderFiles,
@@ -725,6 +728,142 @@ describe('service-worker helpers', () => {
           reorderedFetch,
         ),
       ).rejects.toThrow(/no longer available/i);
+    });
+  });
+
+  describe('Phase 2B download history, hlsOnly projection & RETRY_DOWNLOAD routing [TASK-007]', () => {
+    it('projects hlsOnly cleanly via toPublicLectureMedia without leaking URLs or ks', () => {
+      const projected = toPublicLectureMedia({
+        cmid: 300999,
+        entryId: '1_hls99',
+        lectureTitle: 'HLS Lecture',
+        durationSec: 420,
+        flavors: [],
+        captions: [],
+        directMp4Url: null,
+        hlsOnly: true,
+      });
+
+      expect(projected).toEqual({
+        cmid: 300999,
+        entryId: '1_hls99',
+        lectureTitle: 'HLS Lecture',
+        durationSec: 420,
+        flavors: [],
+        captions: [],
+        hasDirectMp4: false,
+        hlsOnly: true,
+      });
+    });
+
+    it('serializes concurrent completed download history writes into secret-free chrome.storage.local and handles GET_DOWNLOAD_HISTORY', async () => {
+      const localStore: Record<string, unknown> = {};
+      const originalChrome = (globalThis as { chrome?: unknown }).chrome;
+      (globalThis as { chrome: unknown }).chrome = {
+        storage: {
+          local: {
+            get: vi.fn(async (key: string) => ({ [key]: localStore[key] })),
+            set: vi.fn(async (items: Record<string, unknown>) => {
+              Object.assign(localStore, items);
+            }),
+          },
+          session: {
+            get: vi.fn(async () => ({})),
+            set: vi.fn(async () => {}),
+          },
+        },
+        downloads: {
+          download: vi.fn(),
+          cancel: vi.fn(),
+          search: vi.fn(async () => []),
+        },
+        runtime: {
+          id: 'test-ext',
+          sendMessage: vi.fn(async () => undefined),
+        },
+      };
+
+      try {
+        const videoKey = buildHistoryKeyFromDescriptor({
+          kind: 'video',
+          activity: makeActivity({ cmid: 310001, courseId: 7075 }),
+          filename: 'UniPD/a.mp4',
+          preferredHeight: 720,
+        });
+        const folderKey = buildHistoryKeyFromDescriptor({
+          kind: 'material',
+          material: {
+            cmid: 310002,
+            courseId: 7075,
+            sectionIndex: 1,
+            sectionTitle: 'Sec',
+            activityIndex: 1,
+            title: 'Folder',
+            type: 'folder',
+            url: 'https://psico.elearning.unipd.it/mod/folder/view.php?id=310002',
+            fileTypeHint: 'folder',
+            detailsText: null,
+          },
+          filename: 'UniPD/Are Emotions Natural Kinds.pdf',
+          folderFileIndex: 1,
+          expectedFileName: 'Are Emotions Natural Kinds?.pdf',
+        });
+
+        expect(videoKey).toBe('7075:310001:video:720p');
+        expect(folderKey).toBe('7075:310002:material:file_are_emotions_natural_kinds_.pdf');
+
+        await Promise.all([
+          recordCompletedDownloadHistory(
+            {
+              kind: 'video',
+              activity: makeActivity({ cmid: 310001, courseId: 7075 }),
+              filename: 'UniPD/a.mp4',
+              preferredHeight: 720,
+            },
+            100,
+          ),
+          recordCompletedDownloadHistory(
+            {
+              kind: 'material',
+              material: {
+                cmid: 310002,
+                courseId: 7075,
+                sectionIndex: 1,
+                sectionTitle: 'Sec',
+                activityIndex: 1,
+                title: 'Folder',
+                type: 'folder',
+                url: 'https://psico.elearning.unipd.it/mod/folder/view.php?id=310002',
+                fileTypeHint: 'folder',
+                detailsText: null,
+              },
+              filename: 'UniPD/Are Emotions Natural Kinds.pdf',
+              folderFileIndex: 1,
+              expectedFileName: 'Are Emotions Natural Kinds?.pdf',
+            },
+            200,
+          ),
+        ]);
+
+        const entries = await readDownloadHistory();
+        expect(entries).toHaveLength(2);
+        expect(entries.map((e) => e.key)).toEqual([videoKey, folderKey]);
+        expect(JSON.stringify(localStore)).not.toMatch(/https?:|ks=|sesskey=/i);
+
+        const ipcHistory = await handleMessage({ type: 'GET_DOWNLOAD_HISTORY' });
+        expect(ipcHistory).toEqual({
+          ok: true,
+          entries,
+        });
+
+        const retryMissing = await handleMessage({ type: 'RETRY_DOWNLOAD', taskId: 'missing-task' });
+        expect(retryMissing).toMatchObject({
+          ok: true,
+          state: { items: [] },
+        });
+      } finally {
+        (globalThis as { chrome?: unknown }).chrome = originalChrome;
+      }
     });
   });
 });

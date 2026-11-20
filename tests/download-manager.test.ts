@@ -897,4 +897,223 @@ describe('download-manager', () => {
     expect(truncated.startsWith(`UniPD/2026-2027/${courseFolder99}/`)).toBe(true);
     expect(truncated.endsWith('.pptx')).toBe(true);
   });
+
+  it('retains secret-free descriptors on failed/cancelled items, supports retry(), and notifies onDownloadCompleted once [TASK-007]', async () => {
+    const chromeMock = createInMemoryChromeDownloads(900);
+    const savedSnapshots: PersistedDownloadEntry[][] = [];
+    const storage: QueueStorageAdapter = {
+      load: async () => [],
+      save: async (entries) => {
+        savedSnapshots.push(entries);
+      },
+    };
+
+    const resolveSpy = vi.fn(async (descriptor: DownloadResolutionDescriptor) => {
+      return `https://cdnapisec.kaltura.com/p/2203921/sp/220392100/playManifest/entryId/1_test/flavorId/1_flv/format/url/protocol/https/a.mp4?ks=KS_${resolveSpy.mock.calls.length}&name=${encodeURIComponent(descriptor.filename)}`;
+    });
+
+    const onCompletedSpy = vi.fn();
+    const manager = new DownloadManager({
+      api: chromeMock.api,
+      storage,
+      maxConcurrent: 2,
+      resolveDownloadUrl: resolveSpy,
+      onDownloadCompleted: onCompletedSpy,
+    });
+
+    const item1 = makeItem(1, 'video');
+    const item2 = makeItem(2, 'video');
+    const [task1, task2] = await manager.enqueue([item1, item2]);
+
+    // Cancel task1 and interrupt task2 as a transient network failure
+    const afterCancel = await manager.cancel(task1!);
+    const cancelledItem = afterCancel.items.find((i) => i.id === task1);
+    expect(cancelledItem?.status).toBe('cancelled');
+    expect(cancelledItem?.canRetry).toBe(true);
+
+    chromeMock.records.get(901)!.state = 'interrupted';
+    chromeMock.records.get(901)!.error = 'NETWORK_FAILED';
+    await manager.handleDownloadDelta({
+      id: 901,
+      state: { current: 'interrupted' },
+      error: { current: 'NETWORK_FAILED' },
+    });
+
+    const latestSaved = savedSnapshots.at(-1)!;
+    expect(latestSaved.find((e) => e.item.id === task1)?.descriptor).not.toBeNull();
+    expect(latestSaved.find((e) => e.item.id === task2)?.descriptor).not.toBeNull();
+    expect(JSON.stringify(latestSaved)).not.toContain('KS_');
+
+    // Retry both cancelled task1 and failed task2 cleanly
+    const retried1 = await manager.retry(task1!);
+    expect(retried1.items.find((i) => i.id === task1)?.status).toBe('in_progress');
+    expect(retried1.items.find((i) => i.id === task1)?.canRetry).toBe(false);
+
+    const retried2 = await manager.retry(task2!);
+    expect(retried2.items.find((i) => i.id === task2)?.status).toBe('in_progress');
+    expect(resolveSpy).toHaveBeenCalledTimes(4);
+
+    // Complete retried task1 via delta, then ensure repeated search/reconcile does not double-fire
+    const newDl1 = retried1.items.find((i) => i.id === task1)!.downloadId!;
+    chromeMock.records.get(newDl1)!.state = 'complete';
+    chromeMock.records.get(newDl1)!.bytesReceived = 100_000_000;
+    await manager.handleDownloadDelta({ id: newDl1, state: { current: 'complete' } });
+    await manager.refreshActiveProgress();
+
+    expect(onCompletedSpy).toHaveBeenCalledTimes(1);
+    expect(onCompletedSpy.mock.calls[0]?.[0].kind).toBe('video');
+    expect(savedSnapshots.at(-1)!.find((e) => e.item.id === task1)?.descriptor).toBeNull();
+  });
+
+  it('rejects retry() when metadata is missing or an active duplicate exists [TASK-007]', async () => {
+    const chromeMock = createInMemoryChromeDownloads(950);
+    const item = makeItem(1, 'video');
+    const storage: QueueStorageAdapter = {
+      load: async () => [
+        {
+          item: {
+            id: 'missing-desc-task',
+            cmid: 9991,
+            courseId: 7075,
+            lectureTitle: 'Missing',
+            filename: 'UniPD/missing.mp4',
+            kind: 'video',
+            status: 'failed',
+            downloadId: null,
+            bytesReceived: 0,
+            totalBytes: 0,
+            error: 'Old failure',
+            createdAt: 1,
+          },
+          descriptor: null,
+        },
+        {
+          item: {
+            id: 'failed-dup-task',
+            cmid: item.cmid,
+            courseId: 7075,
+            lectureTitle: item.lectureTitle,
+            filename: item.filename,
+            kind: 'video',
+            status: 'failed',
+            downloadId: null,
+            bytesReceived: 0,
+            totalBytes: 100_000_000,
+            error: 'Failed',
+            createdAt: 2,
+          },
+          descriptor: item.descriptor,
+        },
+      ],
+      save: async () => {},
+    };
+
+    const manager = new DownloadManager({
+      api: chromeMock.api,
+      storage,
+      maxConcurrent: 2,
+      resolveDownloadUrl: createDefaultResolver(),
+    });
+
+    const initialState = await manager.refreshActiveProgress();
+    expect(initialState.items.find((i) => i.id === 'missing-desc-task')?.canRetry).toBe(false);
+    expect(initialState.items.find((i) => i.id === 'failed-dup-task')?.canRetry).toBe(true);
+
+    await expect(manager.retry('missing-desc-task')).rejects.toThrow(/metadata is missing/i);
+
+    await manager.enqueue([item]);
+    await expect(manager.retry('failed-dup-task')).rejects.toThrow(/already queued or downloading/i);
+  });
+
+  it('guards against stale resolve/download promises if cancel() then retry() fires before settlement [TASK-007]', async () => {
+    const chromeMock = createInMemoryChromeDownloads(980);
+    const resolvers: Array<{ resolve: (url: string) => void; reject: (err: Error) => void }> = [];
+    const resolveDownloadUrl = vi.fn(
+      () =>
+        new Promise<string>((resolve, reject) => {
+          resolvers.push({ resolve, reject });
+        }),
+    );
+    const onCompletedSpy = vi.fn();
+
+    const manager = new DownloadManager({
+      api: chromeMock.api,
+      maxConcurrent: 1,
+      resolveDownloadUrl,
+      onDownloadCompleted: onCompletedSpy,
+    });
+
+    // Case 1: cancel() + retry() while resolveDownloadUrl() of attempt #1 is still pending,
+    // so status returns to 'queued' and cancelRequested resets to false BEFORE attempt #1 settles.
+    const enqueuePromise = manager.enqueue([makeItem(1, 'video')]);
+    await vi.waitFor(() => {
+      expect(resolvers).toHaveLength(1);
+    });
+
+    const taskId = manager.getState().items[0]!.id;
+    await manager.cancel(taskId);
+    const retryState = await manager.retry(taskId);
+    expect(retryState.items[0]?.status).toBe('queued');
+
+    // Settle stale attempt #1 AFTER retry queued attempt #2:
+    // stale URL must NOT trigger api.download(), and loop must start attempt #2.
+    resolvers[0]!.resolve('https://cdnapisec.kaltura.com/stale-attempt.mp4?ks=STALE');
+    await vi.waitFor(() => {
+      expect(resolvers).toHaveLength(2);
+    });
+    expect(chromeMock.downloadSpy).not.toHaveBeenCalled();
+    expect(manager.getState().items[0]?.status).toBe('in_progress');
+
+    // Case 2: cancel() + retry() while api.download() is still pending for attempt #2,
+    // letting attempt #2's api.download() resolve late with an orphaned downloadId.
+    let releaseStaleDownload!: (id: number) => void;
+    const origDownload = chromeMock.api.download;
+    let delayedCallCount = 0;
+    const delayedDownloadSpy = vi.fn((options: Parameters<typeof origDownload>[0]) => {
+      delayedCallCount += 1;
+      if (delayedCallCount === 1) {
+        return new Promise<number>((resolve) => {
+          releaseStaleDownload = resolve;
+        });
+      }
+      return origDownload(options);
+    });
+    chromeMock.api.download = delayedDownloadSpy;
+
+    resolvers[1]!.resolve('https://cdnapisec.kaltura.com/attempt-2.mp4?ks=TWO');
+    await vi.waitFor(() => {
+      expect(delayedDownloadSpy).toHaveBeenCalledTimes(1);
+    });
+
+    await manager.cancel(taskId);
+    await manager.retry(taskId);
+
+    // Resolve the orphaned attempt #2 api.download() call late: must cancel(7777) and advance to attempt #3.
+    releaseStaleDownload(7777);
+    await vi.waitFor(() => {
+      expect(resolvers).toHaveLength(3);
+    });
+    expect(chromeMock.cancelSpy).toHaveBeenCalledWith(7777);
+
+    // Case 3: cancel() + retry() + stale resolve rejection on attempt #3 must NOT mark attempt #4 failed.
+    await manager.cancel(taskId);
+    await manager.retry(taskId);
+    resolvers[2]!.reject(new Error('stale transient error'));
+    await vi.waitFor(() => {
+      expect(resolvers).toHaveLength(4);
+    });
+
+    resolvers[3]!.resolve('https://cdnapisec.kaltura.com/attempt-4.mp4?ks=FOUR');
+    await enqueuePromise;
+    await vi.waitFor(() => {
+      expect(manager.getState().items[0]?.downloadId).toBe(980);
+    });
+
+    chromeMock.records.get(980)!.state = 'complete';
+    chromeMock.records.get(980)!.bytesReceived = 100_000_000;
+    await manager.handleDownloadDelta({ id: 980, state: { current: 'complete' } });
+
+    expect(onCompletedSpy).toHaveBeenCalledTimes(1);
+    expect(manager.getState().items[0]?.status).toBe('completed');
+  });
 });

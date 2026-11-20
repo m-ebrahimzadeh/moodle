@@ -140,6 +140,7 @@ describe('kaltura-client', () => {
       ];
 
       const media = parseKalturaMultirequestResponse(payload, 2203921, '1_sirqa9b5', 'TEST_KS');
+      expect(media.hlsOnly).toBe(false);
       expect(media.captions).toEqual([
         {
           label: 'Protocol Relative',
@@ -147,6 +148,64 @@ describe('kaltura-client', () => {
           vttUrl: 'https://cdnsecakmi.kaltura.com/api_v3/captions/en.vtt',
         },
       ]);
+    });
+
+    it('sets hlsOnly: true when no progressive MP4 flavors/url exist and an HLS/applehttp source is present [TASK-007]', () => {
+      const hlsPayload = [
+        { objects: [{ id: '1_hlsonly', name: 'Live Replay HLS', duration: 900 }] },
+        {
+          flavorAssets: [],
+          playbackCaptions: [],
+          sources: [
+            {
+              format: 'applehttp',
+              url: 'https://cdnapisec.kaltura.com/p/2203921/sp/220392100/playManifest/entryId/1_hlsonly/format/applehttp/protocol/https/a.m3u8?ks=SECRET_HLS_KS',
+            },
+          ],
+        },
+      ];
+
+      const hlsMedia = parseKalturaMultirequestResponse(hlsPayload, 2203921, '1_hlsonly', 'TEST_KS');
+      expect(hlsMedia.flavors).toEqual([]);
+      expect(hlsMedia.directMp4Url).toBeNull();
+      expect(hlsMedia.hlsOnly).toBe(true);
+
+      const m3u8ExtensionPayload = [
+        { objects: [{ id: '1_m3u8', name: 'M3U8 Only', duration: 300 }] },
+        {
+          flavorAssets: [],
+          playbackCaptions: [],
+          sources: [
+            {
+              format: 'custom',
+              url: '//cdnapisec.kaltura.com/stream/index.m3u8?ks=SECRET_M3U8',
+            },
+          ],
+        },
+      ];
+      expect(parseKalturaMultirequestResponse(m3u8ExtensionPayload, 2203921, '1_m3u8', 'TEST_KS').hlsOnly).toBe(true);
+
+      // If a playable progressive URL/flavor also exists, hlsOnly must remain false
+      const mixedPayload = [
+        { objects: [{ id: '1_mixed', name: 'Mixed', duration: 500 }] },
+        {
+          flavorAssets: [],
+          playbackCaptions: [],
+          sources: [
+            {
+              format: 'applehttp',
+              url: 'https://cdnapisec.kaltura.com/hls/master.m3u8?ks=SECRET',
+            },
+            {
+              format: 'url',
+              url: 'https://cdnapisec.kaltura.com/progressive/video.mp4?ks=SECRET',
+            },
+          ],
+        },
+      ];
+      const mixedMedia = parseKalturaMultirequestResponse(mixedPayload, 2203921, '1_mixed', 'TEST_KS');
+      expect(mixedMedia.directMp4Url).toBe('https://cdnapisec.kaltura.com/progressive/video.mp4?ks=SECRET');
+      expect(mixedMedia.hlsOnly).toBe(false);
     });
   });
 

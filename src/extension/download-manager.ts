@@ -83,6 +83,7 @@ interface InternalDownloadEntry {
   item: DownloadQueueItem;
   descriptor: DownloadResolutionDescriptor | null;
   cancelRequested: boolean;
+  attemptId: number;
 }
 
 /**
@@ -204,6 +205,10 @@ export interface DownloadManagerOptions {
   resolveDownloadUrl: DownloadUrlResolver;
   allowedOrigins?: ReadonlySet<string>;
   onStateChange?: (state: DownloadQueueState) => void;
+  onDownloadCompleted?: (
+    descriptor: DownloadResolutionDescriptor,
+    item: DownloadQueueItem,
+  ) => void | Promise<void>;
 }
 
 function makeDedupeKey(cmid: number, kind: DownloadKind, filename: string): string {
@@ -290,6 +295,10 @@ export class DownloadManager {
   private readonly resolveDownloadUrl: DownloadUrlResolver;
   private readonly allowedOrigins: ReadonlySet<string>;
   private readonly onStateChange?: (state: DownloadQueueState) => void;
+  private readonly onDownloadCompleted?: (
+    descriptor: DownloadResolutionDescriptor,
+    item: DownloadQueueItem,
+  ) => void | Promise<void>;
 
   private readonly entries: InternalDownloadEntry[] = [];
   private readonly downloadIdToTaskId = new Map<number, string>();
@@ -305,6 +314,7 @@ export class DownloadManager {
     this.resolveDownloadUrl = options.resolveDownloadUrl;
     this.allowedOrigins = options.allowedOrigins ?? ALLOWED_MEDIA_ORIGINS;
     this.onStateChange = options.onStateChange;
+    this.onDownloadCompleted = options.onDownloadCompleted;
   }
 
   async hydrate(): Promise<void> {
@@ -339,24 +349,28 @@ export class DownloadManager {
           item.status = 'queued';
           item.error = null;
           item.bytesReceived = 0;
+          item.canRetry = false;
         } else {
           item.status = 'failed';
           item.error = 'Interrupted before download started; please re-enqueue.';
+          item.canRetry = false;
         }
         reconciledOnHydrate = true;
       } else if (item.status === 'queued' && !descriptor) {
         item.status = 'failed';
         item.error = 'Download metadata missing; please re-enqueue.';
+        item.canRetry = false;
         reconciledOnHydrate = true;
-      } else if (
-        item.status === 'completed' ||
-        item.status === 'failed' ||
-        item.status === 'cancelled'
-      ) {
+      } else if (item.status === 'completed') {
         descriptor = null;
+        item.canRetry = false;
+      } else if (item.status === 'failed' || item.status === 'cancelled') {
+        item.canRetry = Boolean(descriptor);
+      } else {
+        item.canRetry = false;
       }
 
-      this.entries.push({ item, descriptor, cancelRequested: false });
+      this.entries.push({ item, descriptor, cancelRequested: false, attemptId: 0 });
       if (item.downloadId !== null) {
         this.downloadIdToTaskId.set(item.downloadId, item.id);
       }
@@ -375,7 +389,12 @@ export class DownloadManager {
   }
 
   getState(): DownloadQueueState {
-    const items = this.entries.map((entry) => ({ ...entry.item }));
+    const items = this.entries.map((entry) => ({
+      ...entry.item,
+      canRetry:
+        (entry.item.status === 'failed' || entry.item.status === 'cancelled') &&
+        Boolean(entry.descriptor),
+    }));
     const activeCount = items.filter((item) => item.status === 'in_progress').length;
     const queuedCount = items.filter((item) => item.status === 'queued').length;
 
@@ -426,12 +445,14 @@ export class DownloadManager {
         totalBytes: req.sizeBytes && req.sizeBytes > 0 ? req.sizeBytes : 0,
         error: null,
         createdAt: Date.now(),
+        canRetry: false,
       };
 
       this.entries.push({
         item,
         descriptor: cloneDescriptor(req.descriptor),
         cancelRequested: false,
+        attemptId: 0,
       });
       createdIds.push(id);
     }
@@ -458,12 +479,10 @@ export class DownloadManager {
     let changed = false;
 
     if (delta.state?.current === 'complete') {
-      entry.item.status = 'completed';
-      if (entry.item.totalBytes > 0) {
-        entry.item.bytesReceived = entry.item.totalBytes;
+      await this.syncSingleDownloadBytes(entry);
+      if ((entry.item.status as string) !== 'completed') {
+        await this.completeEntry(entry);
       }
-      entry.item.error = null;
-      entry.descriptor = null;
       changed = true;
     } else if (delta.state?.current === 'interrupted') {
       const reason = delta.error?.current ?? 'INTERRUPTED';
@@ -474,12 +493,12 @@ export class DownloadManager {
         entry.item.status = 'failed';
         entry.item.error = sanitizeErrorMessage(reason);
       }
-      entry.descriptor = null;
+      entry.item.canRetry = Boolean(entry.descriptor);
+      await this.syncSingleDownloadBytes(entry);
       changed = true;
     }
 
     if (changed) {
-      await this.syncSingleDownloadBytes(entry);
       await this.emitAndPersist();
       await this.pumpQueue();
     }
@@ -499,20 +518,22 @@ export class DownloadManager {
     }
 
     if (entry.item.status === 'queued') {
+      entry.attemptId += 1;
       entry.cancelRequested = true;
       entry.item.status = 'cancelled';
       entry.item.error = CANCELLED_BY_USER_MESSAGE;
-      entry.descriptor = null;
+      entry.item.canRetry = Boolean(entry.descriptor);
       await this.emitAndPersist();
       return this.getState();
     }
 
     if (entry.item.status === 'in_progress') {
+      entry.attemptId += 1;
       entry.cancelRequested = true;
       const existingDownloadId = entry.item.downloadId;
       entry.item.status = 'cancelled';
       entry.item.error = CANCELLED_BY_USER_MESSAGE;
-      entry.descriptor = null;
+      entry.item.canRetry = Boolean(entry.descriptor);
 
       if (existingDownloadId !== null) {
         try {
@@ -526,6 +547,54 @@ export class DownloadManager {
       await this.pumpQueue();
     }
 
+    return this.getState();
+  }
+
+  async retry(taskId: string): Promise<DownloadQueueState> {
+    await this.hydrate();
+    const entry = this.entries.find((e) => e.item.id === taskId);
+    if (!entry) {
+      return this.getState();
+    }
+    if (entry.item.status !== 'failed' && entry.item.status !== 'cancelled') {
+      return this.getState();
+    }
+    if (!entry.descriptor) {
+      throw new Error('Cannot retry download because resolution metadata is missing.');
+    }
+
+    const targetKeys = new Set<string>([
+      makeDedupeKey(entry.item.cmid, entry.item.kind, entry.item.filename),
+      makeDedupeKey(entry.item.cmid, entry.item.kind, entry.descriptor.filename),
+    ]);
+    const hasActiveDuplicate = this.entries.some(
+      (other) =>
+        other !== entry &&
+        (other.item.status === 'queued' || other.item.status === 'in_progress') &&
+        (targetKeys.has(makeDedupeKey(other.item.cmid, other.item.kind, other.item.filename)) ||
+          (other.descriptor?.filename &&
+            targetKeys.has(
+              makeDedupeKey(other.item.cmid, other.item.kind, other.descriptor.filename),
+            ))),
+    );
+    if (hasActiveDuplicate) {
+      throw new Error('This file is already queued or downloading.');
+    }
+
+    if (entry.item.downloadId !== null) {
+      this.downloadIdToTaskId.delete(entry.item.downloadId);
+      entry.item.downloadId = null;
+    }
+
+    entry.attemptId += 1;
+    entry.cancelRequested = false;
+    entry.item.status = 'queued';
+    entry.item.bytesReceived = 0;
+    entry.item.error = null;
+    entry.item.canRetry = false;
+
+    await this.emitAndPersist();
+    await this.pumpQueue();
     return this.getState();
   }
 
@@ -569,8 +638,15 @@ export class DownloadManager {
     }
   }
 
-  private isEntryCancelled(entry: InternalDownloadEntry): boolean {
-    return entry.cancelRequested || entry.item.status === 'cancelled';
+  private isStaleOrCancelledAttempt(
+    entry: InternalDownloadEntry,
+    attemptId: number,
+  ): boolean {
+    return (
+      entry.attemptId !== attemptId ||
+      entry.cancelRequested ||
+      entry.item.status === 'cancelled'
+    );
   }
 
   private async drainAvailableSlots(): Promise<void> {
@@ -589,23 +665,26 @@ export class DownloadManager {
       if (!descriptor) {
         nextEntry.item.status = 'failed';
         nextEntry.item.error = 'Download metadata missing; please re-enqueue.';
+        nextEntry.item.canRetry = false;
         await this.emitAndPersist();
         continue;
       }
 
       // Transition synchronously before awaiting lazy URL resolution and
       // `chrome.downloads.download()` so concurrent callers never exceed `maxConcurrent`.
+      const attemptId = ++nextEntry.attemptId;
       nextEntry.item.status = 'in_progress';
       nextEntry.item.error = null;
+      nextEntry.item.canRetry = false;
       nextEntry.cancelRequested = false;
       await this.emitAndPersist();
-      if (this.isEntryCancelled(nextEntry)) {
+      if (this.isStaleOrCancelledAttempt(nextEntry, attemptId)) {
         continue;
       }
 
       try {
         const resolved = await this.resolveDownloadUrl(descriptor);
-        if (this.isEntryCancelled(nextEntry)) {
+        if (this.isStaleOrCancelledAttempt(nextEntry, attemptId)) {
           continue;
         }
 
@@ -631,7 +710,7 @@ export class DownloadManager {
           saveAs: false,
         });
 
-        if (this.isEntryCancelled(nextEntry)) {
+        if (this.isStaleOrCancelledAttempt(nextEntry, attemptId)) {
           try {
             await this.api.cancel(downloadId);
           } catch {
@@ -645,14 +724,17 @@ export class DownloadManager {
         // Immediately sync in case a fast download (e.g. small .vtt) already finished
         // before `chrome.downloads.download()` resolved and before `downloadIdToTaskId` was set.
         await this.syncSingleDownloadBytes(nextEntry);
+        if (this.isStaleOrCancelledAttempt(nextEntry, attemptId)) {
+          continue;
+        }
         await this.emitAndPersist();
       } catch (err) {
-        if (this.isEntryCancelled(nextEntry)) {
+        if (this.isStaleOrCancelledAttempt(nextEntry, attemptId)) {
           continue;
         }
         nextEntry.item.status = 'failed';
         nextEntry.item.error = sanitizeErrorMessage(err);
-        nextEntry.descriptor = null;
+        nextEntry.item.canRetry = Boolean(nextEntry.descriptor);
         await this.emitAndPersist();
       }
     }
@@ -680,19 +762,47 @@ export class DownloadManager {
     }
   }
 
+  private async completeEntry(entry: InternalDownloadEntry): Promise<void> {
+    const alreadyCompleted = entry.item.status === 'completed';
+    const completedDescriptor = cloneDescriptor(entry.descriptor);
+
+    entry.item.status = 'completed';
+    if (entry.item.totalBytes > 0) {
+      entry.item.bytesReceived = entry.item.totalBytes;
+    } else if (entry.item.bytesReceived > 0) {
+      entry.item.totalBytes = entry.item.bytesReceived;
+    }
+    entry.item.error = null;
+    entry.item.canRetry = false;
+    entry.descriptor = null;
+
+    if (!alreadyCompleted && completedDescriptor && this.onDownloadCompleted) {
+      try {
+        await this.onDownloadCompleted(completedDescriptor, { ...entry.item });
+      } catch {
+        // Non-fatal if completion callback / history write fails
+      }
+    }
+  }
+
   private async syncSingleDownloadBytes(entry: InternalDownloadEntry): Promise<boolean> {
     const item = entry.item;
     if (item.downloadId === null) {
       return false;
     }
+    const trackedDownloadId = item.downloadId;
+    const trackedAttemptId = entry.attemptId;
     try {
-      const results = await this.api.search({ id: item.downloadId });
+      const results = await this.api.search({ id: trackedDownloadId });
+      if (item.downloadId !== trackedDownloadId || entry.attemptId !== trackedAttemptId) {
+        return false;
+      }
       const info = results[0];
       if (!info) {
         if (item.status === 'in_progress') {
           item.status = 'failed';
           item.error = VANISHED_DOWNLOAD_MESSAGE;
-          entry.descriptor = null;
+          item.canRetry = Boolean(entry.descriptor);
           return true;
         }
         return false;
@@ -712,14 +822,7 @@ export class DownloadManager {
         changed = true;
       }
       if (info.state === 'complete' && item.status !== 'completed') {
-        item.status = 'completed';
-        if (item.totalBytes > 0) {
-          item.bytesReceived = item.totalBytes;
-        } else if (item.bytesReceived > 0) {
-          item.totalBytes = item.bytesReceived;
-        }
-        item.error = null;
-        entry.descriptor = null;
+        await this.completeEntry(entry);
         changed = true;
       } else if (info.state === 'interrupted' && item.status === 'in_progress') {
         if (info.error === 'USER_CANCELED') {
@@ -729,7 +832,7 @@ export class DownloadManager {
           item.status = 'failed';
           item.error = sanitizeErrorMessage(info.error ?? 'Download interrupted');
         }
-        entry.descriptor = null;
+        item.canRetry = Boolean(entry.descriptor);
         changed = true;
       }
       return changed;
@@ -742,11 +845,14 @@ export class DownloadManager {
     const state = this.getState();
     if (this.storage) {
       const persisted: PersistedDownloadEntry[] = this.entries.map((entry) => ({
-        item: { ...entry.item },
+        item: {
+          ...entry.item,
+          canRetry:
+            (entry.item.status === 'failed' || entry.item.status === 'cancelled') &&
+            Boolean(entry.descriptor),
+        },
         descriptor:
-          entry.item.status === 'queued' || entry.item.status === 'in_progress'
-            ? cloneDescriptor(entry.descriptor)
-            : null,
+          entry.item.status !== 'completed' ? cloneDescriptor(entry.descriptor) : null,
       }));
       try {
         await this.storage.save(persisted);

@@ -1,13 +1,24 @@
 import {
+  DEFAULT_USER_PREFERENCES,
+  USER_PREFERENCES_STORAGE_KEY,
   buildLectureDownloadPath,
   buildMaterialDownloadPath,
+  createHistoryKeySet,
   formatDuration,
   formatFileSize,
+  hasFolderFileDownloadHistory,
+  hasResourceDownloadHistory,
+  hasVideoDownloadHistory,
+  normalizeUserPreferences,
+  type ActiveContentTab,
   type CourseMaterialActivity,
   type CourseMaterialSection,
   type CourseSection,
+  type DownloadHistoryEntry,
   type EnrolledCourse,
   type LectureActivity,
+  type QualityPreference,
+  type UserPreferences,
 } from '../core/index.js';
 import type {
   DownloadQueueItem,
@@ -44,6 +55,7 @@ interface MaterialUiState {
   folderLoaded: boolean;
   folderError: string | null;
   folderFiles: MaterialFolderFileUiState[];
+  pendingSelectAllRespectSkip: boolean;
 }
 
 interface LectureRowDomRefs {
@@ -62,6 +74,7 @@ interface MaterialRowDomRefs {
   expandBtn: HTMLButtonElement | null;
   filesContainerEl: HTMLDivElement | null;
   folderFileCheckboxes: Map<number, HTMLInputElement>;
+  folderFileDownloadedBadges: Map<number, HTMLSpanElement>;
   renderedFolderFilesSignature: string | null;
 }
 
@@ -71,6 +84,7 @@ interface QueueCardDomRefs {
   statusBadgeEl: HTMLSpanElement;
   progressEl: HTMLProgressElement;
   bytesTextEl: HTMLSpanElement;
+  retryBtnEl: HTMLButtonElement;
   cancelBtnEl: HTMLButtonElement;
   errorEl: HTMLDivElement;
 }
@@ -81,15 +95,18 @@ const state = {
   selectedAy: 'ALL',
   searchQuery: '',
   selectedCourse: null as EnrolledCourse | null,
-  activeContentTab: 'videos' as 'videos' | 'materials',
+  activeContentTab: DEFAULT_USER_PREFERENCES.activeContentTab as ActiveContentTab,
   sections: [] as CourseSection[],
   materialSections: [] as CourseMaterialSection[],
   lecturesByCmid: new Map<number, LectureUiState>(),
   materialsByCmid: new Map<number, MaterialUiState>(),
   inFlightResolves: new Map<number, Promise<void>>(),
   inFlightFolderResolves: new Map<number, Promise<void>>(),
-  defaultQuality: 'highest' as 'highest' | '1080p' | '720p' | '360p',
-  includeVtt: true,
+  defaultQuality: DEFAULT_USER_PREFERENCES.defaultQuality as QualityPreference,
+  includeVtt: DEFAULT_USER_PREFERENCES.includeVtt,
+  skipDownloaded: DEFAULT_USER_PREFERENCES.skipDownloaded,
+  historyEntries: [] as DownloadHistoryEntry[],
+  historyKeys: new Set<string>(),
   enqueuing: false,
   sessionLoadPromise: null as Promise<void> | null,
   pendingSessionReload: false,
@@ -141,6 +158,7 @@ const dom = {
   materialsSelectAllBtn: requireElement<HTMLButtonElement>('materials-select-all-btn'),
   materialsSelectNoneBtn: requireElement<HTMLButtonElement>('materials-select-none-btn'),
   materialsContainer: requireElement<HTMLDivElement>('materials-container'),
+  skipDownloadedToggle: requireElement<HTMLInputElement>('skip-downloaded-toggle'),
   selectionCount: requireElement<HTMLSpanElement>('selection-count'),
   selectionSize: requireElement<HTMLSpanElement>('selection-size'),
   downloadSelectedBtn: requireElement<HTMLButtonElement>('download-selected-btn'),
@@ -406,7 +424,46 @@ function updateContentTabCounts(): void {
   dom.tabMaterials.textContent = `Materials (${materialCount})`;
 }
 
-function setActiveContentTab(tab: 'videos' | 'materials'): void {
+async function loadPreferences(): Promise<void> {
+  try {
+    if (typeof chrome === 'undefined' || !chrome.storage?.local) {
+      return;
+    }
+    const result = await chrome.storage.local.get(USER_PREFERENCES_STORAGE_KEY);
+    const prefs = normalizeUserPreferences(result[USER_PREFERENCES_STORAGE_KEY]);
+    state.defaultQuality = prefs.defaultQuality;
+    state.includeVtt = prefs.includeVtt;
+    state.skipDownloaded = prefs.skipDownloaded;
+    dom.defaultQualitySelect.value = prefs.defaultQuality;
+    dom.includeVttToggle.checked = prefs.includeVtt;
+    dom.skipDownloadedToggle.checked = prefs.skipDownloaded;
+    setActiveContentTab(prefs.activeContentTab, { persist: false });
+  } catch {
+    // Non-fatal: fall back to defaults if local storage read fails
+  }
+}
+
+async function savePreferences(): Promise<void> {
+  try {
+    if (typeof chrome === 'undefined' || !chrome.storage?.local) {
+      return;
+    }
+    const prefs: UserPreferences = {
+      defaultQuality: state.defaultQuality,
+      includeVtt: state.includeVtt,
+      activeContentTab: state.activeContentTab,
+      skipDownloaded: state.skipDownloaded,
+    };
+    await chrome.storage.local.set({ [USER_PREFERENCES_STORAGE_KEY]: prefs });
+  } catch {
+    // Non-fatal: UI still operates normally in memory
+  }
+}
+
+function setActiveContentTab(
+  tab: ActiveContentTab,
+  options: { persist?: boolean } = { persist: true },
+): void {
   state.activeContentTab = tab;
   const isVideos = tab === 'videos';
 
@@ -417,6 +474,10 @@ function setActiveContentTab(tab: 'videos' | 'materials'): void {
 
   dom.videosTabpanel.hidden = !isVideos;
   dom.materialsTabpanel.hidden = isVideos;
+
+  if (options.persist !== false) {
+    void savePreferences();
+  }
 }
 
 function updateSelectionSummary(): void {
@@ -564,11 +625,30 @@ function updateLectureRow(cmid: number): void {
         subBadge.textContent = `${entry.resolved.captions.length} .vtt`;
         metaNodes.push(subBadge);
       }
+    } else if (entry.resolved.hlsOnly) {
+      const hlsBadge = document.createElement('span');
+      hlsBadge.className = 'badge badge-warn';
+      hlsBadge.textContent = 'HLS-only stream';
+      metaNodes.push(hlsBadge);
+
+      const hlsDesc = document.createElement('span');
+      hlsDesc.textContent = 'No progressive MP4 available';
+      metaNodes.push(hlsDesc);
     } else {
       const unsupported = document.createElement('span');
       unsupported.textContent = 'External / non-MP4 embed (not downloadable)';
       metaNodes.push(unsupported);
     }
+  }
+
+  if (
+    state.selectedCourse &&
+    hasVideoDownloadHistory(state.historyKeys, state.selectedCourse.id, activity.cmid)
+  ) {
+    const doneBadge = document.createElement('span');
+    doneBadge.className = 'badge badge-ok';
+    doneBadge.textContent = 'Downloaded';
+    metaNodes.push(doneBadge);
   }
   refs.metaEl.replaceChildren(...metaNodes);
 
@@ -739,6 +819,16 @@ function updateMaterialRow(cmid: number): void {
       metaNodes.push(details);
     }
 
+    if (
+      state.selectedCourse &&
+      hasResourceDownloadHistory(state.historyKeys, state.selectedCourse.id, material.cmid)
+    ) {
+      const doneBadge = document.createElement('span');
+      doneBadge.className = 'badge badge-ok';
+      doneBadge.textContent = 'Downloaded';
+      metaNodes.push(doneBadge);
+    }
+
     refs.metaEl.replaceChildren(...metaNodes);
     return;
   }
@@ -800,6 +890,26 @@ function updateMaterialRow(cmid: number): void {
       metaNodes.push(details);
     }
   }
+
+  if (
+    state.selectedCourse &&
+    entry.folderLoaded &&
+    entry.folderFiles.length > 0 &&
+    entry.folderFiles.every((fileEntry) =>
+      hasFolderFileDownloadHistory(
+        state.historyKeys,
+        state.selectedCourse!.id,
+        material.cmid,
+        fileEntry.file.name,
+        fileEntry.file.fileIndex,
+      ),
+    )
+  ) {
+    const doneBadge = document.createElement('span');
+    doneBadge.className = 'badge badge-ok';
+    doneBadge.textContent = 'Downloaded';
+    metaNodes.push(doneBadge);
+  }
   refs.metaEl.replaceChildren(...metaNodes);
 
   if (refs.expandBtn) {
@@ -823,6 +933,7 @@ function updateMaterialRow(cmid: number): void {
       if (refs.renderedFolderFilesSignature !== null) {
         refs.filesContainerEl.replaceChildren();
         refs.folderFileCheckboxes.clear();
+        refs.folderFileDownloadedBadges.clear();
         refs.renderedFolderFilesSignature = null;
       }
     } else if (!entry.folderExpanded) {
@@ -836,6 +947,7 @@ function updateMaterialRow(cmid: number): void {
           empty.textContent = 'No downloadable files found in this folder.';
           refs.filesContainerEl.replaceChildren(empty);
           refs.folderFileCheckboxes.clear();
+          refs.folderFileDownloadedBadges.clear();
           refs.renderedFolderFilesSignature = '__EMPTY__';
         }
       } else {
@@ -850,6 +962,7 @@ function updateMaterialRow(cmid: number): void {
           const fileList = document.createElement('ul');
           fileList.className = 'material-folder-files';
           refs.folderFileCheckboxes.clear();
+          refs.folderFileDownloadedBadges.clear();
 
           for (const fileEntry of entry.folderFiles) {
             const itemLi = document.createElement('li');
@@ -887,6 +1000,22 @@ function updateMaterialRow(cmid: number): void {
             extBadge.textContent = `.${fileEntry.file.ext}`;
             fileInfo.appendChild(extBadge);
 
+            const downloadedBadge = document.createElement('span');
+            downloadedBadge.className = 'badge badge-ok';
+            downloadedBadge.textContent = 'Downloaded';
+            downloadedBadge.hidden = !(
+              state.selectedCourse &&
+              hasFolderFileDownloadHistory(
+                state.historyKeys,
+                state.selectedCourse.id,
+                material.cmid,
+                fileEntry.file.name,
+                fileEntry.file.fileIndex,
+              )
+            );
+            refs.folderFileDownloadedBadges.set(fileEntry.file.fileIndex, downloadedBadge);
+            fileInfo.appendChild(downloadedBadge);
+
             itemLi.append(chk, fileInfo);
             fileList.appendChild(itemLi);
           }
@@ -898,6 +1027,19 @@ function updateMaterialRow(cmid: number): void {
             const chk = refs.folderFileCheckboxes.get(fileEntry.file.fileIndex);
             if (chk && chk.checked !== fileEntry.selected) {
               chk.checked = fileEntry.selected;
+            }
+            const downloadedBadge = refs.folderFileDownloadedBadges.get(fileEntry.file.fileIndex);
+            if (downloadedBadge) {
+              downloadedBadge.hidden = !(
+                state.selectedCourse &&
+                hasFolderFileDownloadHistory(
+                  state.historyKeys,
+                  state.selectedCourse.id,
+                  material.cmid,
+                  fileEntry.file.name,
+                  fileEntry.file.fileIndex,
+                )
+              );
             }
           }
         }
@@ -970,6 +1112,7 @@ function renderMaterialsStructure(): void {
         }
 
         entry.selected = checkbox.checked;
+        entry.pendingSelectAllRespectSkip = false;
         if (entry.folderLoaded) {
           for (const f of entry.folderFiles) {
             f.selected = checkbox.checked;
@@ -1041,6 +1184,7 @@ function renderMaterialsStructure(): void {
         expandBtn,
         filesContainerEl,
         folderFileCheckboxes: new Map(),
+        folderFileDownloadedBadges: new Map(),
         renderedFolderFilesSignature: null,
       });
       updateMaterialRow(material.cmid);
@@ -1078,6 +1222,18 @@ function createQueueCard(item: DownloadQueueItem): QueueCardDomRefs {
 
   const bytesTextEl = document.createElement('span');
 
+  const actionsEl = document.createElement('div');
+  actionsEl.className = 'queue-actions';
+
+  const retryBtnEl = document.createElement('button');
+  retryBtnEl.type = 'button';
+  retryBtnEl.className = 'btn btn-ghost btn-sm';
+  retryBtnEl.textContent = 'Retry';
+  retryBtnEl.hidden = true;
+  retryBtnEl.addEventListener('click', () => {
+    void retryDownload(item.id);
+  });
+
   const cancelBtnEl = document.createElement('button');
   cancelBtnEl.type = 'button';
   cancelBtnEl.className = 'btn btn-ghost btn-sm';
@@ -1086,7 +1242,8 @@ function createQueueCard(item: DownloadQueueItem): QueueCardDomRefs {
     void cancelDownload(item.id);
   });
 
-  meta.append(bytesTextEl, cancelBtnEl);
+  actionsEl.append(retryBtnEl, cancelBtnEl);
+  meta.append(bytesTextEl, actionsEl);
 
   const errorEl = document.createElement('div');
   errorEl.className = 'queue-error';
@@ -1100,6 +1257,7 @@ function createQueueCard(item: DownloadQueueItem): QueueCardDomRefs {
     statusBadgeEl,
     progressEl,
     bytesTextEl,
+    retryBtnEl,
     cancelBtnEl,
     errorEl,
   };
@@ -1157,9 +1315,15 @@ function updateQueueCard(refs: QueueCardDomRefs, item: DownloadQueueItem): void 
     refs.bytesTextEl.textContent = kindTag;
   }
 
+  const baseName = item.filename.split('/').pop() ?? item.lectureTitle;
   const cancellable = item.status === 'queued' || item.status === 'in_progress';
   refs.cancelBtnEl.hidden = !cancellable;
-  refs.cancelBtnEl.setAttribute('aria-label', `Cancel ${item.lectureTitle}`);
+  refs.cancelBtnEl.setAttribute('aria-label', `Cancel ${baseName}`);
+
+  const retryable =
+    (item.status === 'failed' || item.status === 'cancelled') && item.canRetry === true;
+  refs.retryBtnEl.hidden = !retryable;
+  refs.retryBtnEl.setAttribute('aria-label', `Retry ${baseName}`);
 
   if (item.error) {
     refs.errorEl.textContent = item.error;
@@ -1266,6 +1430,85 @@ async function cancelDownload(taskId: string): Promise<void> {
   }
 }
 
+async function retryDownload(taskId: string): Promise<void> {
+  showAlert(null);
+  try {
+    const res = await sendExtensionMessage({ type: 'RETRY_DOWNLOAD', taskId });
+    state.queue = res.state;
+    renderQueue();
+  } catch (err) {
+    showAlert(err instanceof Error ? err.message : 'Failed to retry download.');
+  }
+}
+
+function applyDownloadHistory(entries: DownloadHistoryEntry[]): void {
+  state.historyEntries = entries;
+  state.historyKeys = createHistoryKeySet(entries);
+  for (const cmid of lectureRowsByCmid.keys()) {
+    updateLectureRow(cmid);
+  }
+  for (const cmid of materialRowsByCmid.keys()) {
+    updateMaterialRow(cmid);
+  }
+}
+
+async function refreshDownloadHistory(): Promise<void> {
+  try {
+    const res = await sendExtensionMessage({ type: 'GET_DOWNLOAD_HISTORY' });
+    applyDownloadHistory(res.entries);
+  } catch {
+    // Non-fatal if history load fails
+  }
+}
+
+function unselectAlreadyDownloadedItems(): void {
+  const course = state.selectedCourse;
+  if (!course) {
+    return;
+  }
+
+  for (const [cmid, entry] of state.lecturesByCmid.entries()) {
+    if (entry.selected && hasVideoDownloadHistory(state.historyKeys, course.id, cmid)) {
+      entry.selected = false;
+      updateLectureRow(cmid);
+    }
+  }
+
+  for (const [cmid, entry] of state.materialsByCmid.entries()) {
+    if (entry.material.type === 'resource') {
+      if (entry.selected && hasResourceDownloadHistory(state.historyKeys, course.id, cmid)) {
+        entry.selected = false;
+        updateMaterialRow(cmid);
+      }
+      continue;
+    }
+
+    if (entry.folderLoaded) {
+      let folderChanged = false;
+      for (const fileEntry of entry.folderFiles) {
+        if (
+          fileEntry.selected &&
+          hasFolderFileDownloadHistory(
+            state.historyKeys,
+            course.id,
+            cmid,
+            fileEntry.file.name,
+            fileEntry.file.fileIndex,
+          )
+        ) {
+          fileEntry.selected = false;
+          folderChanged = true;
+        }
+      }
+      if (folderChanged) {
+        updateMaterialRow(cmid);
+      }
+    }
+  }
+
+  updateSelectionSummary();
+}
+
 function resolveSingleLecture(entry: LectureUiState, generation: number): Promise<void> {
   if (entry.resolved || entry.error) {
     return Promise.resolve();
@@ -1275,7 +1518,8 @@ function resolveSingleLecture(entry: LectureUiState, generation: number): Promis
     return existing;
   }
 
-  const promise = (async () => {
+  let promise: Promise<void> | undefined;
+  promise = (async () => {
     entry.resolving = true;
     entry.error = null;
     updateLectureRow(entry.activity.cmid);
@@ -1305,7 +1549,9 @@ function resolveSingleLecture(entry: LectureUiState, generation: number): Promis
       entry.selected = false;
       entry.error = err instanceof Error ? err.message : 'Resolution failed';
     } finally {
-      state.inFlightResolves.delete(entry.activity.cmid);
+      if (promise && state.inFlightResolves.get(entry.activity.cmid) === promise) {
+        state.inFlightResolves.delete(entry.activity.cmid);
+      }
     }
 
     if (state.scanGeneration === generation) {
@@ -1383,13 +1629,28 @@ function loadFolderFiles(
         return;
       }
       const selectAll = entry.selected;
-      entry.folderFiles = res.files.map((file) => ({
-        file,
-        selected: selectAll,
-      }));
+      const respectSkip = entry.pendingSelectAllRespectSkip && state.skipDownloaded;
+      entry.pendingSelectAllRespectSkip = false;
+      const courseId = state.selectedCourse?.id;
+      entry.folderFiles = res.files.map((file) => {
+        const downloaded =
+          respectSkip &&
+          typeof courseId === 'number' &&
+          hasFolderFileDownloadHistory(
+            state.historyKeys,
+            courseId,
+            entry.material.cmid,
+            file.name,
+            file.fileIndex,
+          );
+        return {
+          file,
+          selected: selectAll && !downloaded,
+        };
+      });
       entry.folderLoaded = true;
       entry.folderLoading = false;
-      if (entry.folderFiles.length === 0) {
+      if (entry.folderFiles.length === 0 || (selectAll && entry.folderFiles.every((f) => !f.selected))) {
         entry.selected = false;
       }
     } catch (err) {
@@ -1484,14 +1745,15 @@ async function selectCourse(course: EnrolledCourse): Promise<void> {
           folderLoaded: false,
           folderError: null,
           folderFiles: [],
+          pendingSelectAllRespectSkip: false,
         });
       }
     }
 
     if (allActivities.length === 0 && state.materialsByCmid.size > 0) {
-      setActiveContentTab('materials');
+      setActiveContentTab('materials', { persist: false });
     } else if (allActivities.length > 0 && state.materialsByCmid.size === 0) {
-      setActiveContentTab('videos');
+      setActiveContentTab('videos', { persist: false });
     }
 
     renderLecturesStructure();
@@ -1895,18 +2157,35 @@ function wireEvents(): void {
   dom.tabMaterials.addEventListener('keydown', handleTabKeydown);
 
   dom.materialsSelectAllBtn.addEventListener('click', () => {
+    const courseId = state.selectedCourse?.id;
     for (const [cmid, entry] of state.materialsByCmid.entries()) {
       if (entry.material.type === 'resource') {
-        entry.selected = true;
+        const downloaded =
+          state.skipDownloaded &&
+          typeof courseId === 'number' &&
+          hasResourceDownloadHistory(state.historyKeys, courseId, cmid);
+        entry.selected = !downloaded;
         updateMaterialRow(cmid);
       } else if (entry.folderLoaded) {
-        entry.selected = entry.folderFiles.length > 0;
         for (const f of entry.folderFiles) {
-          f.selected = true;
+          const downloaded =
+            state.skipDownloaded &&
+            typeof courseId === 'number' &&
+            hasFolderFileDownloadHistory(
+              state.historyKeys,
+              courseId,
+              cmid,
+              f.file.name,
+              f.file.fileIndex,
+            );
+          f.selected = !downloaded;
         }
+        entry.selected =
+          entry.folderFiles.length > 0 && entry.folderFiles.every((f) => f.selected);
         updateMaterialRow(cmid);
       } else if (!entry.folderError) {
         entry.selected = true;
+        entry.pendingSelectAllRespectSkip = state.skipDownloaded;
         entry.folderExpanded = true;
         updateMaterialRow(cmid);
         void loadFolderFiles(entry, state.scanGeneration, { selectAllOnLoad: true });
@@ -1918,6 +2197,7 @@ function wireEvents(): void {
   dom.materialsSelectNoneBtn.addEventListener('click', () => {
     for (const [cmid, entry] of state.materialsByCmid.entries()) {
       entry.selected = false;
+      entry.pendingSelectAllRespectSkip = false;
       for (const f of entry.folderFiles) {
         f.selected = false;
       }
@@ -1927,9 +2207,14 @@ function wireEvents(): void {
   });
 
   dom.selectAllBtn.addEventListener('click', () => {
+    const courseId = state.selectedCourse?.id;
     for (const [cmid, entry] of state.lecturesByCmid.entries()) {
       if (entry.resolved === null ? !entry.error : isEntryDownloadable(entry)) {
-        entry.selected = true;
+        const downloaded =
+          state.skipDownloaded &&
+          typeof courseId === 'number' &&
+          hasVideoDownloadHistory(state.historyKeys, courseId, cmid);
+        entry.selected = !downloaded;
         updateLectureRow(cmid);
       }
     }
@@ -1945,7 +2230,7 @@ function wireEvents(): void {
   });
 
   dom.defaultQualitySelect.addEventListener('change', () => {
-    state.defaultQuality = dom.defaultQualitySelect.value as typeof state.defaultQuality;
+    state.defaultQuality = dom.defaultQualitySelect.value as QualityPreference;
     for (const [cmid, entry] of state.lecturesByCmid.entries()) {
       if (entry.resolved && entry.resolved.flavors.length > 0) {
         const picked = pickFlavorForPreference(entry.resolved.flavors, state.defaultQuality);
@@ -1954,10 +2239,20 @@ function wireEvents(): void {
       }
     }
     updateSelectionSummary();
+    void savePreferences();
   });
 
   dom.includeVttToggle.addEventListener('change', () => {
     state.includeVtt = dom.includeVttToggle.checked;
+    void savePreferences();
+  });
+
+  dom.skipDownloadedToggle.addEventListener('change', () => {
+    state.skipDownloaded = dom.skipDownloadedToggle.checked;
+    void savePreferences();
+    if (state.skipDownloaded) {
+      unselectAlreadyDownloadedItems();
+    }
   });
 
   dom.downloadSelectedBtn.addEventListener('click', () => {
@@ -1986,6 +2281,8 @@ function wireEvents(): void {
     if (event.type === 'QUEUE_UPDATED') {
       state.queue = event.state;
       renderQueue();
+    } else if (event.type === 'DOWNLOAD_HISTORY_UPDATED') {
+      applyDownloadHistory(event.entries);
     } else if (event.type === 'SESSION_UPDATED') {
       if (state.sessionLoadPromise) {
         if (event.session.authenticated) {
@@ -2004,8 +2301,13 @@ function wireEvents(): void {
 }
 
 async function init(): Promise<void> {
+  await loadPreferences();
   wireEvents();
-  await Promise.all([loadSessionAndCourses(), refreshQueueState()]);
+  await Promise.all([
+    loadSessionAndCourses(),
+    refreshQueueState(),
+    refreshDownloadHistory(),
+  ]);
 }
 
 void init();

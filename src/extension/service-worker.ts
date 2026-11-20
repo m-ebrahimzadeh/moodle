@@ -1,6 +1,10 @@
 import {
   DEFAULT_MOODLE_BASE_URL,
+  DOWNLOAD_HISTORY_STORAGE_KEY,
+  MAX_DOWNLOAD_HISTORY_ENTRIES,
   UNIPD_SHIBBOLETH_LOGIN_PATH,
+  buildDownloadHistoryKey,
+  buildFolderFileHistoryVariant,
   buildMaterialDownloadPath,
   extractPluginfileMp4Url,
   extractPluginfileResourceUrl,
@@ -9,12 +13,15 @@ import {
   fetchMoodleSession,
   isLoginPageUrl,
   isUnauthenticatedMoodleHtml,
+  normalizeDownloadHistoryEntries,
   parseContentDispositionFilename,
   parseCourseContentFromHtml,
   parseFolderFilesFromHtml,
+  recordDownloadHistoryLru,
   resolveKalturaLectureMedia,
   type CaptionTrack,
   type CourseMaterialActivity,
+  type DownloadHistoryEntry,
   type FolderFileEntry,
   type LectureActivity,
   type MoodleSessionInfo,
@@ -91,7 +98,95 @@ export function toPublicLectureMedia(media: ResolvedLectureMedia): PublicResolve
       index,
     })),
     hasDirectMp4: Boolean(media.directMp4Url),
+    hlsOnly: Boolean(media.hlsOnly),
   };
+}
+
+let historyMutationChain: Promise<DownloadHistoryEntry[]> = Promise.resolve([]);
+
+/**
+ * Builds a canonical secret-free `courseId:cmid:kind:variant` history key
+ * from a completed `DownloadResolutionDescriptor`.
+ */
+export function buildHistoryKeyFromDescriptor(
+  descriptor: DownloadResolutionDescriptor,
+): string {
+  if (descriptor.kind === 'material') {
+    const isFolderFile =
+      descriptor.material.type === 'folder' ||
+      typeof descriptor.folderFileIndex === 'number' ||
+      Boolean(descriptor.expectedFileName);
+    const variant = isFolderFile
+      ? buildFolderFileHistoryVariant(descriptor.expectedFileName, descriptor.folderFileIndex)
+      : 'resource';
+    return buildDownloadHistoryKey({
+      courseId: descriptor.material.courseId,
+      cmid: descriptor.material.cmid,
+      kind: 'material',
+      variant,
+    });
+  }
+
+  if (descriptor.kind === 'subtitle') {
+    return buildDownloadHistoryKey({
+      courseId: descriptor.activity.courseId,
+      cmid: descriptor.activity.cmid,
+      kind: 'subtitle',
+      variant: descriptor.captionLanguageCode || 'und',
+    });
+  }
+
+  const heightVariant =
+    typeof descriptor.preferredHeight === 'number' && descriptor.preferredHeight > 0
+      ? `${Math.trunc(descriptor.preferredHeight)}p`
+      : 'default';
+  return buildDownloadHistoryKey({
+    courseId: descriptor.activity.courseId,
+    cmid: descriptor.activity.cmid,
+    kind: 'video',
+    variant: heightVariant,
+  });
+}
+
+export async function readDownloadHistory(): Promise<DownloadHistoryEntry[]> {
+  try {
+    if (!chrome.storage?.local) {
+      return [];
+    }
+    const result = await chrome.storage.local.get(DOWNLOAD_HISTORY_STORAGE_KEY);
+    return normalizeDownloadHistoryEntries(
+      result[DOWNLOAD_HISTORY_STORAGE_KEY],
+      MAX_DOWNLOAD_HISTORY_ENTRIES,
+    );
+  } catch {
+    return [];
+  }
+}
+
+export async function recordCompletedDownloadHistory(
+  descriptor: DownloadResolutionDescriptor,
+  completedAt: number = Date.now(),
+): Promise<DownloadHistoryEntry[]> {
+  const key = buildHistoryKeyFromDescriptor(descriptor);
+  const next = historyMutationChain.then(async () => {
+    const current = await readDownloadHistory();
+    const updated = recordDownloadHistoryLru(
+      current,
+      key,
+      completedAt,
+      MAX_DOWNLOAD_HISTORY_ENTRIES,
+    );
+    try {
+      if (chrome.storage?.local) {
+        await chrome.storage.local.set({ [DOWNLOAD_HISTORY_STORAGE_KEY]: updated });
+      }
+    } catch {
+      // Non-fatal if storage quota/availability rejects local write
+    }
+    return updated;
+  });
+  historyMutationChain = next.catch(() => []);
+  return next;
 }
 
 /**
@@ -299,6 +394,7 @@ export async function resolveMoodleHostedMp4(
         flavors: [],
         captions: [],
         directMp4Url: null,
+        hlsOnly: false,
       };
     }
     const html = await response.text();
@@ -323,6 +419,7 @@ export async function resolveMoodleHostedMp4(
       flavors: [],
       captions: [],
       directMp4Url: null,
+      hlsOnly: false,
     };
   }
 
@@ -335,6 +432,7 @@ export async function resolveMoodleHostedMp4(
       flavors: [],
       captions: [],
       directMp4Url: null,
+      hlsOnly: false,
     };
   }
 
@@ -357,6 +455,7 @@ export async function resolveMoodleHostedMp4(
     ],
     captions: [],
     directMp4Url: mp4Url,
+    hlsOnly: false,
   };
 }
 
@@ -891,6 +990,10 @@ function getDownloadManager(): DownloadManager {
       onStateChange(state) {
         void broadcastEvent({ type: 'QUEUE_UPDATED', state });
       },
+      onDownloadCompleted: async (descriptor) => {
+        const entries = await recordCompletedDownloadHistory(descriptor);
+        await broadcastEvent({ type: 'DOWNLOAD_HISTORY_UPDATED', entries });
+      },
     });
   }
   return activeDownloadManager;
@@ -978,9 +1081,19 @@ export async function handleMessage(
       return { ok: true, state };
     }
 
+    case 'RETRY_DOWNLOAD': {
+      const state = await manager.retry(request.taskId);
+      return { ok: true, state };
+    }
+
     case 'CLEAR_FINISHED_DOWNLOADS': {
       const state = await manager.clearFinished();
       return { ok: true, state };
+    }
+
+    case 'GET_DOWNLOAD_HISTORY': {
+      const entries = await readDownloadHistory();
+      return { ok: true, entries };
     }
 
     default: {
