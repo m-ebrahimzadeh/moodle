@@ -3,7 +3,7 @@
 > Generated deterministically by `bin/uesf.mjs sync-snapshot` per `policies/SOURCE_OF_TRUTH_POLICY.md` (`DEC-023`, `DEC-026`).
 > * **Canonical Control Plane**: `.uesf/`
 > * **Snapshot Version**: `0.1.1`
-> * **Source-Ledger-SHA256**: `d6023bdbccb0018d934a7753e91c3256f1bee0b5404de0a1ddf6cc318f0aee64` (`d6023bdbccb0`)
+> * **Source-Ledger-SHA256**: `32c886bec4e69c17368a911f8d23f767d0c5283000b3ece9bb0dff8fdbf74398` (`32c886bec4e6`)
 > * **Last Ledger Update**: `2026-11-20`
 
 ## 1. Empirically Verified Repository Facts (`[VERIFIED_BY_GIT_AND_FS_PROBE]`)
@@ -12,7 +12,7 @@
 * **Missing Registered Files on Disk**: `0`
 * **Unindexed Canonical Markdown Files on Disk**: `0`
 * **Header-to-Registry Version Mismatches**: `0`
-* **Total Recorded Tasks (`ACCEPTED` / Total)**: `8 / 10`
+* **Total Recorded Tasks (`ACCEPTED` / Total)**: `9 / 10`
 * **Total Recorded Decisions (`DEC-*`)**: `7`
 * **Unresolved Open Questions (`OQ-*`)**: `0`
 
@@ -107,7 +107,7 @@ Covers all project work executed under UESF `Fast-Path` and `Standard-Contract` 
 | `TASK-007` | Phase 2B: UX Persistence, Secret-Free Download History Badge, Queue Retry & HLS-Only Diagnostics (`v0.2.0`) | Developer | QA / Architect | Local Repository (`moodle`) | `A1` | `ACCEPTED` | Accepted by CTO & Human Stakeholder (`2026-11-20`, `HO-TASK-007-03.md`) on hardened commit `c4ffd60` following independent Tier 2 verification: Independent Architect (`80e3e610`, `CONFORMANT`, `0 CRITICAL`/`0 HIGH`/`0 MEDIUM` after monotonic `attemptId` guard verified in `942d7f8..c4ffd60`), Independent QA (`62c9b7de`, `PASS_WITH_FINDINGS`, `0` Critical/High/Medium: `tsc --noEmit` `0`, `91/91` Vitest tests across `8` files, `vite build` `64` modules, CI static `dist/` checks exit `0`, `0` `npm audit` vulns, `0`-diff `public/manifest.json` & `package.json`, `CLEAN` snapshot), and Live Authenticated Chrome `158.0.8127.36` E2E (`8c2859e4`, `PASS`: `5/5` scenarios on `942d7f8` against `psico.elearning.unipd.it`, `%PDF-1.4` & MP4 `ftypisom` verified on disk, DOM focus stability across `DOWNLOAD_HISTORY_UPDATED`, `0` console/SW errors, `0` secrets/PII in storage; `0`-diff `src/ui/` & `src/core/` in `942d7f8..c4ffd60`). |
 | `TASK-008` | Phase 2C: `local_kalturamediagallery` (`media19.elearning.unipd.it`) Live `A0` Investigation Spike & Optional Supplement | Architect / Developer | CTO / QA | Local Repository (`moodle`) | `A0` | `PROPOSED` | Sequenced after `TASK-007` (`DEC-005`); `A0` read-only LTI/KAF feasibility spike required prior to any `optional_host_permissions` (`A3`) contract. |
 | `TASK-009` | Automatic UniPD Shibboleth SSO Login & Encrypted Credential Storage (`DSC-001`, `DEC-006`) | Developer | Security / Architect / QA | Local Repository (`moodle`, `feat/TASK-009-auto-shibboleth-login`) | `A1` | `ACCEPTED` | Accepted by Human Stakeholder (`2026-11-20`) and merged to `main` (`HO-TASK-009-02.md` / `EV-TASK-009-01`, code commit `7f56925`): `S1` AES-256-GCM + non-extractable IndexedDB `CryptoKey` vault, `T1` headless Shibboleth SAML2 flow, `withAutoReauth` singleflight + lockout breaker, `https://shibidp.cca.unipd.it/*` permission, and Side Panel Auto-Login UI; Independent `Security/Architect` (`79ba4f85`, `PASS`, `0 CRITICAL`/`0 HIGH`/`0 MEDIUM`/`0 LOW`) and Independent `QA` (`88b5172f`, `PASS`, `0 CRITICAL`/`0 HIGH`/`0 MEDIUM`/`0 LOW`: `tsc --noEmit` `0`, `113/113` Vitest across `11` files, `vite build` `67` modules, CI static `dist/` checks `0`, `0` `npm audit` vulns, `CLEAN` snapshot). |
-| `TASK-010` | Course-Level `Lectures/` & `Materials/` Hierarchy and Date/Order Video Naming (`DSC-002`, `DEC-007`) | Developer | QA / Architect | Local Repository (`moodle`, `feat/TASK-010-download-hierarchy-naming`) | `A1` | `IN_REVIEW` | Implemented `DSC-002` (`DEC-007` amending `DEC-005`): course-level `Lectures/` & `Materials/{Section}/` hierarchy, course-wide lecture numbering + Kaltura `createdAt` (`YYYY-MM-DD`), course-folder invariance (`path-builder.ts` child-first trimming), and `chrome.downloads.onDeterminingFilename` filename guard (`download-manager.ts`, `service-worker.ts`). Verified via `tsc --noEmit` (`0`), `116/116` Vitest across `11` files, `vite build` (`67` modules), and Live Chrome `158.0.8127.36` E2E on `psico.elearning.unipd.it` confirming on-disk `UniPD/2026-2027/PSQ4107821 - INTERPRETATION AND EVALUATION OF PSYCHOLOGICAL RESEARCH/{Lectures,Materials}/...` (`mp4`, `.vtt`, `.pdf`, plus `(1)` uniquify on existing dirs) with `HO-TASK-010-02.md`. |
+| `TASK-010` | Course-Level `Lectures/` & `Materials/` Hierarchy and Date/Order Video Naming (`DSC-002`, `DEC-007`) | Developer | QA / Architect | Local Repository (`moodle`, `feat/TASK-010-download-hierarchy-naming`) | `A1` | `ACCEPTED` | Accepted by Human Stakeholder (`2026-11-20`, `HO-TASK-010-02.md`) following `DSC-002` (`DEC-007`), `49ea372` + `584df69` (course-folder invariance + `chrome.downloads.onDeterminingFilename` guard), Independent Architect (`b4b626af`, `CONFORMANT`) & QA (`171d4e8f`, `PASS`), Live Chrome `158.0.8127.36` E2E on `psico.elearning.unipd.it` (`mp4`, `.vtt`, `.pdf`, plus `(1)` uniquify on disk under shared `{CourseFolder}`), `tsc --noEmit` (`0`), `116/116` Vitest across `11` files, and `vite build` (`67` modules). |
 
 ## 5. Active Outbound Task Queue
 * `TASK-008` remains `PROPOSED` awaiting separate authorization.
@@ -188,4 +188,4 @@ Covers all tracked Markdown documents in the `moodle` repository (`README.md`, `
 
 ## 3. Automated Discrepancy & Drift Audit (`[DRIFT_CHECK]`)
 * **Drift Audit Verdict**: `CLEAN (0 discrepancies between canonical ledgers and on-disk specification tree)`
-* **Cloud / Remote Session Note**: When reading this file remotely without local `CAP-FS`/`CAP-GIT`, treat Section 1 as verified at the time of the commit that produced `Source-Ledger-SHA256: d6023bdbccb0`, treat Section 2 as `[REPORTED — Remote Ledger]`, and treat any uncommitted local working-tree edits as `[UNKNOWN — Local FS Unavailable]`.
+* **Cloud / Remote Session Note**: When reading this file remotely without local `CAP-FS`/`CAP-GIT`, treat Section 1 as verified at the time of the commit that produced `Source-Ledger-SHA256: 32c886bec4e6`, treat Section 2 as `[REPORTED — Remote Ledger]`, and treat any uncommitted local working-tree edits as `[UNKNOWN — Local FS Unavailable]`.
