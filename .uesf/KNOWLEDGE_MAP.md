@@ -22,7 +22,7 @@ Covers all tracked Markdown documents in the `moodle` repository (`README.md`, `
 | `MOODLE-CTRL-001` | `.uesf/EXTENSION.md` | Layer 6: Project Extension | Architect | `0.1.1` | Verified |
 | `MOODLE-CTRL-002` | `.uesf/KNOWLEDGE_MAP.md` | Operational State Index | CTO | `0.1.0` | Verified |
 | `MOODLE-CTRL-003` | `.uesf/ACTIVE_TASKS.md` | Operational Task Ledger | CTO | `0.1.0` | Verified |
-| `MOODLE-CTRL-004` | `.uesf/DECISION_LOG.md` | Operational Decision Log | CTO | `0.1.4` | Verified |
+| `MOODLE-CTRL-004` | `.uesf/DECISION_LOG.md` | Operational Decision Log | CTO | `0.1.5` | Verified |
 | `MOODLE-DOC-001` | `README.md` | Domain 2: Project Overview | Architect | `0.1.0` | Verified |
 | `MOODLE-DOC-002` | `docs/investigation/01-auth-and-session-flow.md` | Domain 2: Investigation Spec | Architect | `0.1.0` | Verified |
 | `MOODLE-DOC-003` | `docs/investigation/02-course-and-lecture-discovery.md` | Domain 2: Investigation Spec | Architect | `0.1.0` | Verified |

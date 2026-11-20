@@ -288,6 +288,12 @@ function sanitizeResolvedRelativePath(rawPath: string): string {
  * and lazily resolve fresh signed URLs right before dequeue so long batches survive
  * MV3 30-second service worker dormancy and 1-hour Kaltura `ks` expiration.
  */
+interface InFlightApiDownload {
+  url: string;
+  filename: string;
+  resolvedDownloadId: number | null;
+}
+
 export class DownloadManager {
   private readonly api: DownloadsApiAdapter;
   private readonly storage?: QueueStorageAdapter;
@@ -302,6 +308,7 @@ export class DownloadManager {
 
   private readonly entries: InternalDownloadEntry[] = [];
   private readonly downloadIdToTaskId = new Map<number, string>();
+  private readonly inFlightApiDownloads: InFlightApiDownload[] = [];
   private nextSequence = 1;
   private hydratePromise: Promise<void> | null = null;
   private pumping = false;
@@ -649,6 +656,39 @@ export class DownloadManager {
     );
   }
 
+  resolveDeterminingFilename(item: {
+    id: number;
+    url?: string;
+    finalUrl?: string;
+  }): string | null {
+    const taskId = this.downloadIdToTaskId.get(item.id);
+    if (taskId) {
+      const tracked = this.entries.find((e) => e.item.id === taskId);
+      if (tracked) {
+        return tracked.item.filename;
+      }
+    }
+
+    const bound = this.inFlightApiDownloads.find((r) => r.resolvedDownloadId === item.id);
+    if (bound) {
+      return bound.filename;
+    }
+
+    const unbound = this.inFlightApiDownloads.filter((r) => r.resolvedDownloadId === null);
+    const exactMatch = unbound.find(
+      (r) =>
+        (item.url && r.url === item.url) ||
+        (item.finalUrl && r.url === item.finalUrl),
+    );
+    const match = exactMatch ?? (unbound.length === 1 ? unbound[0] : undefined);
+    if (match) {
+      match.resolvedDownloadId = item.id;
+      return match.filename;
+    }
+
+    return null;
+  }
+
   private async drainAvailableSlots(): Promise<void> {
     while (true) {
       const activeCount = this.entries.filter((e) => e.item.status === 'in_progress').length;
@@ -703,12 +743,26 @@ export class DownloadManager {
         }
 
         const safeUrl = validateAllowedMediaUrl(rawUrl, this.allowedOrigins);
-        const downloadId = await this.api.download({
+        const inFlightRecord: InFlightApiDownload = {
           url: safeUrl,
           filename: nextEntry.item.filename,
-          conflictAction: 'uniquify',
-          saveAs: false,
-        });
+          resolvedDownloadId: null,
+        };
+        this.inFlightApiDownloads.push(inFlightRecord);
+        let downloadId: number;
+        try {
+          downloadId = await this.api.download({
+            url: safeUrl,
+            filename: nextEntry.item.filename,
+            conflictAction: 'uniquify',
+            saveAs: false,
+          });
+        } finally {
+          const idx = this.inFlightApiDownloads.indexOf(inFlightRecord);
+          if (idx !== -1) {
+            this.inFlightApiDownloads.splice(idx, 1);
+          }
+        }
 
         if (this.isStaleOrCancelledAttempt(nextEntry, attemptId)) {
           try {

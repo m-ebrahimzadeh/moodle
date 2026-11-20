@@ -1129,4 +1129,42 @@ describe('download-manager', () => {
     expect(sanitized).toContain('SAMLResponse=[REDACTED]');
     expect(sanitized).toContain('__Host-JSESSIONID=[REDACTED]');
   });
+
+  it('resolves intended filename synchronously for onDeterminingFilename both in-flight (with redirect URL) and after binding', async () => {
+    const chromeMock = createInMemoryChromeDownloads(990);
+    let determiningResultBeforeReturn: string | null = null;
+    const manager = new DownloadManager({
+      api: {
+        ...chromeMock.api,
+        download: vi.fn(async (opts) => {
+          const id = await chromeMock.api.download(opts);
+          // Simulate Chrome firing downloads.onDeterminingFilename after 302 redirect BEFORE download() returns
+          determiningResultBeforeReturn = manager.resolveDeterminingFilename({
+            id,
+            url: 'https://cfvod.kaltura.com/redirected/name/a.mp4',
+            finalUrl: 'https://cfvod.kaltura.com/cdn/a.mp4',
+          });
+          return id;
+        }),
+      },
+      maxConcurrent: 1,
+      resolveDownloadUrl: async () => 'https://cdnapisec.kaltura.com/p/1/serveFlavor/entryId/abc?ks=1',
+    });
+
+    const desiredPath = 'UniPD/2026-2027/PSQ4107821 - Course/Lectures/01 - 2026-09-30 - VideoLecture 1 (1080p).mp4';
+    await manager.enqueue([
+      {
+        ...makeItem(1),
+        filename: desiredPath,
+        descriptor: {
+          ...makeItem(1).descriptor!,
+          filename: desiredPath,
+        },
+      },
+    ]);
+
+    expect(determiningResultBeforeReturn).toBe(desiredPath);
+    expect(manager.resolveDeterminingFilename({ id: 990 })).toBe(desiredPath);
+    expect(manager.resolveDeterminingFilename({ id: 12345 })).toBeNull();
+  });
 });

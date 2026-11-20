@@ -87,6 +87,7 @@ export interface ResolvedLectureMedia {
   entryId: string | null;
   lectureTitle: string;
   durationSec: number | null;
+  createdAtSec?: number | null;
   flavors: VideoFlavor[];
   captions: CaptionTrack[];
   directMp4Url: string | null;
@@ -97,9 +98,8 @@ export interface LectureDownloadPathParams {
   academicYear: string | null;
   courseCode: string | null;
   courseTitle: string;
-  sectionIndex: number;
-  sectionTitle: string;
-  activityIndex: number;
+  lectureIndex: number;
+  lectureDate?: string | null;
   lectureTitle: string;
   resolutionLabel?: string;
   ext: string;

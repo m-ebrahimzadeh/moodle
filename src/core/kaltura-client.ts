@@ -16,6 +16,7 @@ interface KalturaBaseEntryLike {
   id?: string;
   name?: string;
   duration?: number;
+  createdAt?: number;
 }
 
 interface KalturaFlavorAssetLike {
@@ -254,6 +255,10 @@ export function parseKalturaMultirequestResponse(
     typeof entry?.duration === 'number' && Number.isFinite(entry.duration) && entry.duration >= 0
       ? entry.duration
       : null;
+  const createdAtSec =
+    typeof entry?.createdAt === 'number' && Number.isFinite(entry.createdAt) && entry.createdAt > 0
+      ? Math.trunc(entry.createdAt)
+      : null;
 
   const rawFlavors = Array.isArray(playbackContext.flavorAssets)
     ? playbackContext.flavorAssets
@@ -339,6 +344,7 @@ export function parseKalturaMultirequestResponse(
     entryId,
     lectureTitle,
     durationSec,
+    createdAtSec,
     flavors,
     captions,
     directMp4Url,
