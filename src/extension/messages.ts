@@ -47,6 +47,7 @@ export interface PublicResolvedLectureMedia {
   entryId: string | null;
   lectureTitle: string;
   durationSec: number | null;
+  createdAtSec: number | null;
   flavors: PublicVideoFlavor[];
   captions: PublicCaptionTrack[];
   hasDirectMp4: boolean;

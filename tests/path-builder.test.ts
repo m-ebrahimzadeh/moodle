@@ -5,6 +5,7 @@ import {
   buildMaterialDownloadPath,
   formatDuration,
   formatFileSize,
+  formatUnixSecondsToIsoDate,
   sanitizePathSegment,
 } from '../src/core/path-builder.js';
 
@@ -35,35 +36,32 @@ describe('path-builder', () => {
   });
 
   describe('buildLectureDownloadPath', () => {
-    it('builds canonical organized path for MP4 with resolution when within MAX_PATH budget', () => {
+    it('builds course-level Lectures path with lecture number, ISO date, and resolution when within MAX_PATH budget', () => {
       const path = buildLectureDownloadPath({
         academicYear: '2026-2027',
         courseCode: 'PSQ4107809',
         courseTitle: 'PSYCHOLOGICAL TESTING',
-        sectionIndex: 3,
-        sectionTitle: '1. Measurement and Validity',
-        activityIndex: 1,
+        lectureIndex: 1,
+        lectureDate: '2026-10-05',
         lectureTitle: 'Recorded Lecture: Unit 1 Introduction',
         resolutionLabel: '1080p',
         ext: 'mp4',
       });
 
       expect(path).toBe(
-        'UniPD/2026-2027/PSQ4107809 - PSYCHOLOGICAL TESTING/03 - 1. Measurement and Validity/01 - Recorded Lecture Unit 1 Introduction (1080p).mp4',
+        'UniPD/2026-2027/PSQ4107809 - PSYCHOLOGICAL TESTING/Lectures/01 - 2026-10-05 - Recorded Lecture Unit 1 Introduction (1080p).mp4',
       );
       expect(path.length).toBeLessThanOrEqual(MAX_RELATIVE_DOWNLOAD_PATH_LENGTH);
     });
 
-    it('enforces <= 180-char Windows MAX_PATH budget while preserving hierarchy, resolution suffix, and extension [ARCH-005 / QA-006]', () => {
+    it('enforces <= 180-char Windows MAX_PATH budget while preserving Lectures hierarchy, date, resolution suffix, and extension [ARCH-005 / QA-006]', () => {
       const path = buildLectureDownloadPath({
         academicYear: '2026-2027',
         courseCode: 'PSQ4107809',
         courseTitle:
           'PRINCIPLES AND APPLICATIONS OF PSYCHOLOGICAL TESTING AND CLINICAL NEUROPSYCHOLOGICAL ASSESSMENT',
-        sectionIndex: 3,
-        sectionTitle:
-          '1. Introduction: Measurement, Reliability, Construct Validity, and Factor Analysis — Oct 5 - 14',
-        activityIndex: 12,
+        lectureIndex: 12,
+        lectureDate: '2026-10-14',
         lectureTitle:
           'Recorded Lecture: Unit 1 Comprehensive Introduction to Psychometric Modeling and Classical Test Theory',
         resolutionLabel: '1080p',
@@ -76,39 +74,42 @@ describe('path-builder', () => {
       expect(segments[0]).toBe('UniPD');
       expect(segments[1]).toBe('2026-2027');
       expect(segments[2]).toMatch(/^PSQ4107809 - .+/);
-      expect(segments[3]).toMatch(/^03 - .+/);
-      expect(segments[4]).toMatch(/^12 - .+ \(1080p\)\.mp4$/);
+      expect(segments[3]).toBe('Lectures');
+      expect(segments[4]).toMatch(/^12 - 2026-10-14 - .+ \(1080p\)\.mp4$/);
     });
 
-    it('builds clean fallback path when academicYear, courseCode, or resolutionLabel are absent', () => {
+    it('builds clean fallback path when academicYear, courseCode, lectureDate, or resolutionLabel are absent or invalid', () => {
       const path = buildLectureDownloadPath({
         academicYear: null,
         courseCode: null,
         courseTitle: 'Clinical Seminar',
-        sectionIndex: 0,
-        sectionTitle: 'General',
-        activityIndex: 2,
+        lectureIndex: 2,
+        lectureDate: 'not-a-date',
         lectureTitle: 'Workshop Recording',
         ext: '.VTT',
       });
 
-      expect(path).toBe('UniPD/Unknown-AY/Clinical Seminar/00 - General/02 - Workshop Recording.vtt');
+      expect(path).toBe('UniPD/Unknown-AY/Clinical Seminar/Lectures/02 - Workshop Recording.vtt');
     });
   });
 
   describe('formatting helpers', () => {
-    it('formats byte sizes and durations human-readably', () => {
+    it('formats byte sizes, durations, and UTC ISO dates human-readably', () => {
       expect(formatFileSize(0)).toBe('Size unknown');
       expect(formatFileSize(167_215_572)).toBe('159.5 MB');
       expect(formatFileSize(1_500_000_000)).toBe('1.40 GB');
       expect(formatDuration(2363)).toBe('39m 23s');
       expect(formatDuration(5817)).toBe('1h 36m');
       expect(formatDuration(null)).toBe('');
+      expect(formatUnixSecondsToIsoDate(1759651200)).toBe('2025-10-05');
+      expect(formatUnixSecondsToIsoDate(null)).toBeNull();
+      expect(formatUnixSecondsToIsoDate(0)).toBeNull();
+      expect(formatUnixSecondsToIsoDate(-10)).toBeNull();
     });
   });
 
-  describe('buildMaterialDownloadPath (Option A — DEC-005)', () => {
-    it('builds Option A path for single mod_resource and deduplicates repeated extensions (.pdf.pdf -> .pdf)', () => {
+  describe('buildMaterialDownloadPath (Course-level Materials/ + section — DSC-002 / DEC-007)', () => {
+    it('builds Materials/{Section} path for single mod_resource and deduplicates repeated extensions (.pdf.pdf -> .pdf)', () => {
       const path = buildMaterialDownloadPath({
         academicYear: '2026-2027',
         courseCode: 'PSQ4107809',
@@ -121,12 +122,12 @@ describe('path-builder', () => {
       });
 
       expect(path).toBe(
-        'UniPD/2026-2027/PSQ4107809 - PSYCHOLOGICAL TESTING/03 - 1. Measurement/Materials/02 - Course Syllabus.pdf',
+        'UniPD/2026-2027/PSQ4107809 - PSYCHOLOGICAL TESTING/Materials/03 - 1. Measurement/02 - Course Syllabus.pdf',
       );
       expect(path.length).toBeLessThanOrEqual(MAX_RELATIVE_DOWNLOAD_PATH_LENGTH);
     });
 
-    it('builds Option A path for mod_folder files preserving subPath and enforcing Windows reserved stems', () => {
+    it('builds Materials/{Section} path for mod_folder files preserving subPath and enforcing Windows reserved stems', () => {
       const path = buildMaterialDownloadPath({
         academicYear: '2026-2027',
         courseCode: 'PSQ4107809',
@@ -142,7 +143,7 @@ describe('path-builder', () => {
       });
 
       expect(path).toBe(
-        'UniPD/2026-2027/PSQ4107809 - PSYCHOLOGICAL TESTING/02 - Datasets/Materials/Lab Datasets/Week 1/R Scripts/CON_.r',
+        'UniPD/2026-2027/PSQ4107809 - PSYCHOLOGICAL TESTING/Materials/02 - Datasets/Lab Datasets/Week 1/R Scripts/CON_.r',
       );
       expect(path.length).toBeLessThanOrEqual(MAX_RELATIVE_DOWNLOAD_PATH_LENGTH);
     });
@@ -188,8 +189,8 @@ describe('path-builder', () => {
       expect(segments[0]).toBe('UniPD');
       expect(segments[1]).toBe('2026-2027');
       expect(segments[2]).toMatch(/^PSQ4107809 - .+/);
-      expect(segments[3]).toMatch(/^12 - .+/);
-      expect(segments[4]).toBe('Materials');
+      expect(segments[3]).toBe('Materials');
+      expect(segments[4]).toMatch(/^12 - .+/);
       expect(segments[5]).toMatch(/^07 - .+\.pdf$/);
     });
   });

@@ -363,7 +363,7 @@ describe('service-worker helpers', () => {
         {
           kind: 'material',
           material: makeMaterial(),
-          filename: 'UniPD/2026-2027/PSQ4107809 - Testing/02 - Week 2/Materials/01 - Week 3 Slides.bin',
+          filename: 'UniPD/2026-2027/PSQ4107809 - Testing/Materials/02 - Week 2/01 - Week 3 Slides.bin',
           pathContext: {
             academicYear: '2026-2027',
             courseCode: 'PSQ4107809',
@@ -375,7 +375,7 @@ describe('service-worker helpers', () => {
       expect(target).toEqual({
         url: 'https://psico.elearning.unipd.it/pluginfile.php/45678/mod_resource/content/1/Week%203%20Slides.pptx',
         resolvedFilename:
-          'UniPD/2026-2027/PSQ4107809 - Testing/02 - Week 2/Materials/01 - Week 3 Slides.pptx',
+          'UniPD/2026-2027/PSQ4107809 - Testing/Materials/02 - Week 2/01 - Week 3 Slides.pptx',
         resolvedSizeBytes: 987654,
       });
     });
@@ -456,7 +456,7 @@ describe('service-worker helpers', () => {
         {
           kind: 'material',
           material: folderMaterial,
-          filename: 'UniPD/2026-2027/PSQ4107809 - Testing/02 - Week 2/Materials/Slide Deck Archive/Datasets/week_01 data.sav',
+          filename: 'UniPD/2026-2027/PSQ4107809 - Testing/Materials/02 - Week 2/Slide Deck Archive/Datasets/week_01 data.sav',
           folderFileIndex: 1,
           expectedFileName: 'week_01 data.sav',
           pathContext: {
@@ -470,7 +470,7 @@ describe('service-worker helpers', () => {
       expect(resolvedTarget).toEqual({
         url: 'https://psico.elearning.unipd.it/pluginfile.php/77777/mod_folder/content/0/Datasets/week_01%20data.sav?forcedownload=1',
         resolvedFilename:
-          'UniPD/2026-2027/PSQ4107809 - Testing/02 - Week 2/Materials/Slide Deck Archive/Datasets/week_01 data.sav',
+          'UniPD/2026-2027/PSQ4107809 - Testing/Materials/02 - Week 2/Slide Deck Archive/Datasets/week_01 data.sav',
       });
     });
 
@@ -703,7 +703,7 @@ describe('service-worker helpers', () => {
         {
           kind: 'material',
           material: folderMat,
-          filename: 'UniPD/2026-2027/PSQ4107809 - Testing/02 - Week 2/Materials/Slide Deck Archive/Datasets/week_01 data.sav',
+          filename: 'UniPD/2026-2027/PSQ4107809 - Testing/Materials/02 - Week 2/Slide Deck Archive/Datasets/week_01 data.sav',
           folderFileIndex: 1,
           expectedFileName: 'week_01 data.sav',
           pathContext: {
@@ -717,7 +717,7 @@ describe('service-worker helpers', () => {
       expect(reorderedTarget).toEqual({
         url: 'https://psico.elearning.unipd.it/pluginfile.php/77777/mod_folder/content/0/Datasets/week_01%20data.sav',
         resolvedFilename:
-          'UniPD/2026-2027/PSQ4107809 - Testing/02 - Week 2/Materials/Slide Deck Archive/Datasets/week_01 data.sav',
+          'UniPD/2026-2027/PSQ4107809 - Testing/Materials/02 - Week 2/Slide Deck Archive/Datasets/week_01 data.sav',
       });
 
       // 5. Deleted expectedFileName does not silently download another file occupying fileIndex 1
@@ -726,7 +726,7 @@ describe('service-worker helpers', () => {
           {
             kind: 'material',
             material: folderMat,
-            filename: 'UniPD/2026-2027/PSQ4107809 - Testing/02 - Week 2/Materials/Slide Deck Archive/deleted.pdf',
+            filename: 'UniPD/2026-2027/PSQ4107809 - Testing/Materials/02 - Week 2/Slide Deck Archive/deleted.pdf',
             folderFileIndex: 1,
             expectedFileName: 'deleted.pdf',
           },
@@ -754,6 +754,7 @@ describe('service-worker helpers', () => {
         entryId: '1_hls99',
         lectureTitle: 'HLS Lecture',
         durationSec: 420,
+        createdAtSec: null,
         flavors: [],
         captions: [],
         hasDirectMp4: false,

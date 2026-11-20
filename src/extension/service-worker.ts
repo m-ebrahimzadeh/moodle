@@ -86,6 +86,7 @@ export function toPublicLectureMedia(media: ResolvedLectureMedia): PublicResolve
     entryId: media.entryId,
     lectureTitle: media.lectureTitle,
     durationSec: media.durationSec,
+    createdAtSec: media.createdAtSec ?? null,
     flavors: media.flavors.map((flavor) => ({
       id: flavor.id,
       width: flavor.width,
@@ -396,6 +397,7 @@ export async function resolveMoodleHostedMp4(
         entryId: null,
         lectureTitle: activity.title,
         durationSec: null,
+        createdAtSec: null,
         flavors: [],
         captions: [],
         directMp4Url: null,
@@ -423,6 +425,7 @@ export async function resolveMoodleHostedMp4(
       entryId: null,
       lectureTitle: activity.title,
       durationSec: null,
+      createdAtSec: null,
       flavors: [],
       captions: [],
       directMp4Url: null,
@@ -436,6 +439,7 @@ export async function resolveMoodleHostedMp4(
       entryId: null,
       lectureTitle: activity.title,
       durationSec: null,
+      createdAtSec: null,
       flavors: [],
       captions: [],
       directMp4Url: null,
@@ -448,6 +452,7 @@ export async function resolveMoodleHostedMp4(
     entryId: null,
     lectureTitle: activity.title,
     durationSec: null,
+    createdAtSec: null,
     flavors: [
       {
         id: 'moodle-mp4',

@@ -78,6 +78,7 @@ describe('kaltura-client', () => {
       expect(media.entryId).toBe('1_sirqa9b5');
       expect(media.lectureTitle).toBe('Unit 1 Lecture: What is Measurement');
       expect(media.durationSec).toBe(2363);
+      expect(media.createdAtSec).toBeNull();
 
       expect(media.flavors).toHaveLength(2);
       expect(media.flavors[0]?.id).toBe('1_c1qlwlrw');
@@ -206,6 +207,15 @@ describe('kaltura-client', () => {
       const mixedMedia = parseKalturaMultirequestResponse(mixedPayload, 2203921, '1_mixed', 'TEST_KS');
       expect(mixedMedia.directMp4Url).toBe('https://cdnapisec.kaltura.com/progressive/video.mp4?ks=SECRET');
       expect(mixedMedia.hlsOnly).toBe(false);
+    });
+
+    it('extracts Kaltura baseEntry createdAt Unix timestamp into createdAtSec [TASK-010]', () => {
+      const payload = [
+        { objects: [{ id: '1_dated', name: 'Dated Lecture', duration: 1200, createdAt: 1759651200 }] },
+        { flavorAssets: [], playbackCaptions: [] },
+      ];
+      const media = parseKalturaMultirequestResponse(payload, 2203921, '1_dated', 'TEST_KS');
+      expect(media.createdAtSec).toBe(1759651200);
     });
   });
 

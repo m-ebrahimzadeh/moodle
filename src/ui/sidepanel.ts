@@ -6,6 +6,7 @@ import {
   createHistoryKeySet,
   formatDuration,
   formatFileSize,
+  formatUnixSecondsToIsoDate,
   hasFolderFileDownloadHistory,
   hasResourceDownloadHistory,
   hasVideoDownloadHistory,
@@ -1920,8 +1921,10 @@ async function enqueueSelectedDownloads(): Promise<void> {
     const items: EnqueueDownloadItem[] = [];
     let skippedNonDownloadable = 0;
 
+    let courseLectureIndex = 0;
     for (const section of state.sections) {
       for (const activity of section.activities) {
+        courseLectureIndex += 1;
         const entry = state.lecturesByCmid.get(activity.cmid);
         if (!entry || !entry.selected) {
           continue;
@@ -1936,14 +1939,14 @@ async function enqueueSelectedDownloads(): Promise<void> {
         const flavor = getSelectedFlavor(entry);
         const resolutionLabel = flavor && flavor.height > 0 ? `${flavor.height}p` : undefined;
         const lectureTitle = activity.title || entry.resolved.lectureTitle;
+        const lectureDate = formatUnixSecondsToIsoDate(entry.resolved.createdAtSec);
 
         const videoPath = buildLectureDownloadPath({
           academicYear: course.academicYear,
           courseCode: course.courseCode,
           courseTitle: course.title,
-          sectionIndex: section.sectionIndex,
-          sectionTitle: section.title,
-          activityIndex: activity.activityIndex,
+          lectureIndex: courseLectureIndex,
+          lectureDate,
           lectureTitle,
           resolutionLabel,
           ext: flavor?.fileExt ?? 'mp4',
@@ -1993,9 +1996,8 @@ async function enqueueSelectedDownloads(): Promise<void> {
               academicYear: course.academicYear,
               courseCode: course.courseCode,
               courseTitle: course.title,
-              sectionIndex: section.sectionIndex,
-              sectionTitle: section.title,
-              activityIndex: activity.activityIndex,
+              lectureIndex: courseLectureIndex,
+              lectureDate,
               lectureTitle,
               resolutionLabel: langSuffix,
               ext: 'vtt',
