@@ -1,0 +1,27 @@
+{
+  "manifest_version": 3,
+  "name": "UniPD Moodle Lecture Downloader",
+  "version": "0.1.0",
+  "description": "Discover and download UniPD Psychology Moodle video lectures and WebVTT subtitles directly inside your browser session.",
+  "permissions": [
+    "sidePanel",
+    "downloads",
+    "storage"
+  ],
+  "host_permissions": [
+    "https://psico.elearning.unipd.it/*",
+    "https://cdnapisec.kaltura.com/*",
+    "https://cfvod.kaltura.com/*",
+    "https://cdnsecakmi.kaltura.com/*"
+  ],
+  "action": {
+    "default_title": "Open UniPD Moodle Lecture Downloader"
+  },
+  "background": {
+    "service_worker": "service-worker.js",
+    "type": "module"
+  },
+  "side_panel": {
+    "default_path": "src/ui/sidepanel.html"
+  }
+}

@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <title>UniPD Moodle Lecture Downloader</title>
+    <link rel="stylesheet" href="./sidepanel.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="app-header">
+        <div class="header-title-row">
+          <div>
+            <h1>UniPD Moodle</h1>
+            <p class="subtitle">psico.elearning.unipd.it &middot; Lecture Downloader</p>
+          </div>
+          <button
+            id="refresh-session-btn"
+            type="button"
+            class="btn btn-ghost btn-sm"
+            title="Re-check Moodle session"
+          >
+            Refresh
+          </button>
+        </div>
+
+        <section
+          id="auth-banner"
+          class="auth-banner auth-checking"
+          aria-live="polite"
+        >
+          <div class="auth-status-text">
+            <span id="auth-dot" class="status-dot" aria-hidden="true"></span>
+            <span id="auth-message">Checking UniPD Moodle session…</span>
+          </div>
+          <button id="sso-login-btn" type="button" class="btn btn-primary btn-sm" hidden>
+            Log in with UniPD Single Sign-On
+          </button>
+        </section>
+      </header>
+
+      <main class="app-main">
+        <div id="global-alert" class="alert" role="alert" hidden></div>
+
+        <!-- Course Discovery & Filter Section -->
+        <section id="courses-panel" class="panel" aria-labelledby="courses-heading">
+          <div class="panel-header">
+            <h2 id="courses-heading">Enrolled Courses</h2>
+            <span id="course-count-badge" class="badge">0</span>
+          </div>
+
+          <div class="filter-row">
+            <label class="field">
+              <span class="field-label">Academic Year</span>
+              <select id="ay-filter" aria-label="Filter by academic year">
+                <option value="ALL">All years</option>
+              </select>
+            </label>
+
+            <label class="field field-grow">
+              <span class="field-label">Search courses</span>
+              <input
+                id="course-search"
+                type="search"
+                placeholder="Filter by title or code (e.g. PSQ…)"
+                autocomplete="off"
+              />
+            </label>
+          </div>
+
+          <div id="course-list" class="course-list" role="listbox" aria-label="Enrolled courses">
+            <p class="empty-state">Sign in to load your UniPD Moodle courses.</p>
+          </div>
+        </section>
+
+        <!-- Course Lecture Checklist Section -->
+        <section id="lectures-panel" class="panel" aria-labelledby="lectures-heading" hidden>
+          <div class="panel-header">
+            <div class="lecture-heading-wrap">
+              <h2 id="lectures-heading">Course Lectures</h2>
+              <p id="selected-course-label" class="muted-caption"></p>
+            </div>
+            <button id="rescan-course-btn" type="button" class="btn btn-ghost btn-sm">
+              Rescan
+            </button>
+          </div>
+
+          <div class="toolbar">
+            <div class="toolbar-group">
+              <button id="select-all-btn" type="button" class="btn btn-ghost btn-sm">
+                Select all
+              </button>
+              <button id="select-none-btn" type="button" class="btn btn-ghost btn-sm">
+                Clear
+              </button>
+            </div>
+
+            <div class="toolbar-group">
+              <label class="inline-control" for="default-quality-select">
+                <span>Quality</span>
+                <select id="default-quality-select">
+                  <option value="highest">Highest</option>
+                  <option value="1080p">1080p</option>
+                  <option value="720p">720p</option>
+                  <option value="360p">360p</option>
+                </select>
+              </label>
+
+              <label class="checkbox-label" for="include-vtt-toggle">
+                <input id="include-vtt-toggle" type="checkbox" checked />
+                <span>Include .vtt</span>
+              </label>
+            </div>
+          </div>
+
+          <div id="lectures-container" class="lectures-container"></div>
+
+          <div class="action-bar">
+            <div class="selection-summary">
+              <span id="selection-count">0 selected</span>
+              <span id="selection-size" class="muted-caption"></span>
+            </div>
+            <button id="download-selected-btn" type="button" class="btn btn-primary" disabled>
+              Download Selected
+            </button>
+          </div>
+        </section>
+
+        <!-- Live Download Queue Section -->
+        <section id="queue-panel" class="panel" aria-labelledby="queue-heading">
+          <div class="panel-header">
+            <div class="queue-heading-row">
+              <h2 id="queue-heading">Download Queue</h2>
+              <span id="queue-stats-badge" class="badge">0 active / 0 queued</span>
+            </div>
+            <button id="clear-finished-btn" type="button" class="btn btn-ghost btn-sm" disabled>
+              Clear finished
+            </button>
+          </div>
+
+          <div id="queue-list" class="queue-list">
+            <p class="empty-state">No downloads yet. Select lectures above to queue them (max 2 concurrent).</p>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script type="module" src="./sidepanel.ts"></script>
+  </body>
+</html>

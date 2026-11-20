@@ -1,0 +1,648 @@
+import {
+  DEFAULT_MOODLE_BASE_URL,
+  UNIPD_SHIBBOLETH_LOGIN_PATH,
+  extractPluginfileMp4Url,
+  fetchCoursePageHtml,
+  fetchEnrolledCourses,
+  fetchMoodleSession,
+  isLoginPageUrl,
+  isUnauthenticatedMoodleHtml,
+  parseCourseSectionsFromHtml,
+  resolveKalturaLectureMedia,
+  type CaptionTrack,
+  type LectureActivity,
+  type MoodleSessionInfo,
+  type ResolvedLectureMedia,
+  type VideoFlavor,
+} from '../core/index.js';
+import {
+  ALLOWED_MEDIA_ORIGINS,
+  DEFAULT_MAX_CONCURRENT_DOWNLOADS,
+  DownloadManager,
+  createChromeDownloadsAdapter,
+  createSessionQueueStorageAdapter,
+  sanitizeErrorMessage,
+  validateAllowedMediaUrl,
+} from './download-manager.js';
+import type {
+  DownloadResolutionDescriptor,
+  ExtensionBroadcastEvent,
+  ExtensionRequest,
+  ExtensionResponse,
+  PublicResolvedLectureMedia,
+  PublicSessionStatus,
+} from './messages.js';
+
+const MOODLE_ORIGIN = new URL(DEFAULT_MOODLE_BASE_URL).origin;
+const SSO_STATE_STORAGE_KEY = 'unipd_sso_probe_state_v1';
+
+interface SsoProbeState {
+  awaitingSsoLogin: boolean;
+  lastKnownAuthenticated: boolean;
+}
+
+export function toPublicSession(info: MoodleSessionInfo): PublicSessionStatus {
+  return {
+    authenticated: info.authenticated,
+    userId: info.userId,
+    loginUrl: info.loginUrl,
+  };
+}
+
+/**
+ * Strips signed CDN/Kaltura `downloadUrl`, `vttUrl`, and `directMp4Url` fields
+ * so `?ks=...` and signed query parameters never cross the SW <-> UI boundary.
+ */
+export function toPublicLectureMedia(media: ResolvedLectureMedia): PublicResolvedLectureMedia {
+  return {
+    cmid: media.cmid,
+    entryId: media.entryId,
+    lectureTitle: media.lectureTitle,
+    durationSec: media.durationSec,
+    flavors: media.flavors.map((flavor) => ({
+      id: flavor.id,
+      width: flavor.width,
+      height: flavor.height,
+      bitrateKbps: flavor.bitrateKbps,
+      sizeBytes: flavor.sizeBytes,
+      fileExt: flavor.fileExt,
+      isOriginal: flavor.isOriginal,
+    })),
+    captions: media.captions.map((caption, index) => ({
+      label: caption.label,
+      languageCode: caption.languageCode,
+      index,
+    })),
+    hasDirectMp4: Boolean(media.directMp4Url),
+  };
+}
+
+/**
+ * Strictly validates that a tab URL is on the Moodle origin and is not an
+ * active login or Shibboleth handoff URL.
+ */
+export function isMoodlePostLoginUrl(
+  rawUrl: string,
+  moodleBaseUrl: string = DEFAULT_MOODLE_BASE_URL,
+): boolean {
+  try {
+    const parsed = new URL(rawUrl);
+    const expectedOrigin = new URL(moodleBaseUrl).origin;
+    if (parsed.origin !== expectedOrigin) {
+      return false;
+    }
+    const lowerPath = parsed.pathname.toLowerCase();
+    return !lowerPath.includes('/login/') && !lowerPath.includes('/auth/shibboleth/');
+  } catch {
+    return false;
+  }
+}
+
+async function readSsoProbeState(): Promise<SsoProbeState> {
+  try {
+    if (!chrome.storage?.session) {
+      return { awaitingSsoLogin: false, lastKnownAuthenticated: false };
+    }
+    const result = await chrome.storage.session.get(SSO_STATE_STORAGE_KEY);
+    const raw = result[SSO_STATE_STORAGE_KEY] as Partial<SsoProbeState> | undefined;
+    return {
+      awaitingSsoLogin: Boolean(raw?.awaitingSsoLogin),
+      lastKnownAuthenticated: Boolean(raw?.lastKnownAuthenticated),
+    };
+  } catch {
+    return { awaitingSsoLogin: false, lastKnownAuthenticated: false };
+  }
+}
+
+async function writeSsoProbeState(patch: Partial<SsoProbeState>): Promise<void> {
+  try {
+    if (!chrome.storage?.session) {
+      return;
+    }
+    const current = await readSsoProbeState();
+    await chrome.storage.session.set({
+      [SSO_STATE_STORAGE_KEY]: { ...current, ...patch },
+    });
+  } catch {
+    // Non-fatal if session storage is unavailable
+  }
+}
+
+async function hasOpenSidePanelContext(): Promise<boolean> {
+  try {
+    const getContexts = (
+      chrome.runtime as typeof chrome.runtime & {
+        getContexts?: (filter: { contextTypes: string[] }) => Promise<unknown[]>;
+      }
+    ).getContexts;
+    if (typeof getContexts !== 'function') {
+      return false;
+    }
+    const contexts = await getContexts({ contextTypes: ['SIDE_PANEL'] });
+    return Array.isArray(contexts) && contexts.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+async function shouldProbeSessionOnTabUpdate(): Promise<boolean> {
+  const probeState = await readSsoProbeState();
+  if (probeState.awaitingSsoLogin) {
+    return true;
+  }
+  if (probeState.lastKnownAuthenticated) {
+    return false;
+  }
+  return hasOpenSidePanelContext();
+}
+
+async function broadcastEvent(event: ExtensionBroadcastEvent): Promise<void> {
+  try {
+    await chrome.runtime.sendMessage(event);
+  } catch {
+    // No active Side Panel listener — ignore silently.
+  }
+}
+
+export async function probeContentLength(
+  url: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<number> {
+  let safeUrl: string;
+  try {
+    safeUrl = validateAllowedMediaUrl(url, ALLOWED_MEDIA_ORIGINS);
+  } catch {
+    return 0;
+  }
+
+  try {
+    const parsed = new URL(safeUrl);
+    const head = await fetchImpl(safeUrl, {
+      method: 'HEAD',
+      credentials: parsed.origin === MOODLE_ORIGIN ? 'include' : 'omit',
+      redirect: 'follow',
+    });
+    if (!head.ok) {
+      return 0;
+    }
+    const header = head.headers.get('content-length');
+    const parsedLen = header ? Number.parseInt(header, 10) : 0;
+    return Number.isFinite(parsedLen) && parsedLen > 0 ? parsedLen : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function isHtmlContentType(contentType: string): boolean {
+  return contentType.includes('text/html') || contentType.includes('application/xhtml+xml');
+}
+
+export async function resolveMoodleHostedMp4(
+  activity: LectureActivity,
+  fetchImpl: typeof fetch = fetch,
+): Promise<ResolvedLectureMedia> {
+  let activityOrigin: string;
+  try {
+    activityOrigin = new URL(activity.url).origin;
+  } catch {
+    throw new Error(`Invalid Moodle activity URL for activity ${activity.cmid}.`);
+  }
+  if (activityOrigin !== MOODLE_ORIGIN) {
+    throw new Error(`Activity ${activity.cmid} points outside the UniPD Moodle origin.`);
+  }
+
+  const controller = new AbortController();
+  const response = await fetchImpl(activity.url, {
+    method: 'GET',
+    credentials: 'include',
+    redirect: 'follow',
+    signal: controller.signal,
+  });
+
+  if (!response.ok) {
+    controller.abort();
+    throw new Error(
+      `Failed to load Moodle video activity ${activity.cmid} (HTTP ${response.status}).`,
+    );
+  }
+
+  const finalUrl = response.url || activity.url;
+  if (isLoginPageUrl(finalUrl)) {
+    controller.abort();
+    throw new Error('Moodle session expired. Please sign in with UniPD SSO again.');
+  }
+
+  const contentType = (response.headers.get('content-type') ?? '').toLowerCase();
+
+  let mp4Url: string | null = null;
+  let sizeBytes = 0;
+
+  if (
+    contentType.startsWith('video/') ||
+    (/\.mp4(?:[?#]|$)/i.test(finalUrl) && !isHtmlContentType(contentType))
+  ) {
+    // Do not buffer a multi-hundred-MB MP4 body into service worker memory.
+    const lengthHeader = response.headers.get('content-length');
+    const parsedLen = lengthHeader ? Number.parseInt(lengthHeader, 10) : 0;
+    sizeBytes = Number.isFinite(parsedLen) && parsedLen > 0 ? parsedLen : 0;
+    controller.abort();
+    mp4Url = validateAllowedMediaUrl(finalUrl, ALLOWED_MEDIA_ORIGINS);
+  } else if (isHtmlContentType(contentType)) {
+    const html = await response.text();
+    if (isUnauthenticatedMoodleHtml(html, finalUrl)) {
+      throw new Error('Moodle session expired. Please sign in with UniPD SSO again.');
+    }
+    const extracted = extractPluginfileMp4Url(html, DEFAULT_MOODLE_BASE_URL);
+    if (extracted) {
+      mp4Url = validateAllowedMediaUrl(extracted, ALLOWED_MEDIA_ORIGINS);
+      sizeBytes = await probeContentLength(mp4Url, fetchImpl);
+    }
+  } else {
+    // Immediately abort arbitrary non-HTML binary responses (.pdf, .zip, etc.)
+    // so they are never buffered into service worker RAM.
+    controller.abort();
+    return {
+      cmid: activity.cmid,
+      entryId: null,
+      lectureTitle: activity.title,
+      durationSec: null,
+      flavors: [],
+      captions: [],
+      directMp4Url: null,
+    };
+  }
+
+  if (!mp4Url) {
+    return {
+      cmid: activity.cmid,
+      entryId: null,
+      lectureTitle: activity.title,
+      durationSec: null,
+      flavors: [],
+      captions: [],
+      directMp4Url: null,
+    };
+  }
+
+  return {
+    cmid: activity.cmid,
+    entryId: null,
+    lectureTitle: activity.title,
+    durationSec: null,
+    flavors: [
+      {
+        id: 'moodle-mp4',
+        width: 0,
+        height: 0,
+        bitrateKbps: 0,
+        sizeBytes,
+        fileExt: 'mp4',
+        isOriginal: true,
+        downloadUrl: mp4Url,
+      },
+    ],
+    captions: [],
+    directMp4Url: mp4Url,
+  };
+}
+
+export async function resolveActivityMedia(
+  activity: LectureActivity,
+  fetchImpl: typeof fetch = fetch,
+): Promise<ResolvedLectureMedia> {
+  if (activity.type === 'kalvidres') {
+    const bridgeUrl = `${DEFAULT_MOODLE_BASE_URL}/mod/kalvidres/player_bridge.php?cmid=${encodeURIComponent(String(activity.cmid))}`;
+    const controller = new AbortController();
+    const response = await fetchImpl(bridgeUrl, {
+      method: 'GET',
+      credentials: 'include',
+      redirect: 'follow',
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      controller.abort();
+      throw new Error(
+        `Failed to fetch Kaltura player bridge for activity ${activity.cmid} (HTTP ${response.status}).`,
+      );
+    }
+
+    const finalUrl = response.url || bridgeUrl;
+    if (isLoginPageUrl(finalUrl)) {
+      controller.abort();
+      throw new Error('Moodle session expired. Please sign in with UniPD SSO again.');
+    }
+
+    const contentType = (response.headers.get('content-type') ?? '').toLowerCase();
+    if (contentType && !isHtmlContentType(contentType)) {
+      controller.abort();
+      throw new Error(`Unexpected Kaltura player bridge response type for activity ${activity.cmid}.`);
+    }
+
+    const bridgeHtml = await response.text();
+    if (isUnauthenticatedMoodleHtml(bridgeHtml, finalUrl)) {
+      throw new Error('Moodle session expired. Please sign in with UniPD SSO again.');
+    }
+
+    const resolved = await resolveKalturaLectureMedia(bridgeHtml, fetchImpl);
+    return {
+      cmid: activity.cmid,
+      ...resolved,
+    };
+  }
+
+  return resolveMoodleHostedMp4(activity, fetchImpl);
+}
+
+function selectFlavorForDescriptor(
+  flavors: VideoFlavor[],
+  descriptor: DownloadResolutionDescriptor,
+): VideoFlavor | null {
+  if (flavors.length === 0) {
+    return null;
+  }
+  if (descriptor.preferredFlavorId) {
+    const exactId = flavors.find((f) => f.id === descriptor.preferredFlavorId);
+    if (exactId) {
+      return exactId;
+    }
+  }
+  if (typeof descriptor.preferredHeight === 'number' && descriptor.preferredHeight > 0) {
+    const exactHeight = flavors.find((f) => f.height === descriptor.preferredHeight);
+    if (exactHeight) {
+      return exactHeight;
+    }
+    const nearest = [...flavors].sort(
+      (a, b) =>
+        Math.abs(a.height - descriptor.preferredHeight!) -
+        Math.abs(b.height - descriptor.preferredHeight!),
+    );
+    if (nearest[0]) {
+      return nearest[0];
+    }
+  }
+  return flavors[0] ?? null;
+}
+
+function selectCaptionForDescriptor(
+  captions: CaptionTrack[],
+  descriptor: DownloadResolutionDescriptor,
+): CaptionTrack | null {
+  if (captions.length === 0) {
+    return null;
+  }
+
+  const targetLang = descriptor.captionLanguageCode?.trim().toLowerCase() ?? null;
+  const targetLabel = descriptor.captionLabel?.trim().toLowerCase() ?? null;
+
+  if (targetLang && targetLabel) {
+    const exactBoth = captions.find(
+      (c) =>
+        c.languageCode.trim().toLowerCase() === targetLang &&
+        c.label.trim().toLowerCase() === targetLabel,
+    );
+    if (exactBoth) {
+      return exactBoth;
+    }
+  }
+
+  if (
+    typeof descriptor.captionIndex === 'number' &&
+    descriptor.captionIndex >= 0 &&
+    descriptor.captionIndex < captions.length
+  ) {
+    const indexed = captions[descriptor.captionIndex];
+    if (indexed && (!targetLang || indexed.languageCode.trim().toLowerCase() === targetLang)) {
+      return indexed;
+    }
+  }
+
+  if (targetLang) {
+    const byLang = captions.find((c) => c.languageCode.trim().toLowerCase() === targetLang);
+    if (byLang) {
+      return byLang;
+    }
+  }
+
+  if (
+    typeof descriptor.captionIndex === 'number' &&
+    descriptor.captionIndex >= 0 &&
+    descriptor.captionIndex < captions.length
+  ) {
+    return captions[descriptor.captionIndex] ?? null;
+  }
+
+  return captions[0] ?? null;
+}
+
+/**
+ * Lazily resolves a fresh, allowlist-validated download URL on dequeue from a
+ * secret-free `DownloadResolutionDescriptor`. Keeps Kaltura `ks` fresh across
+ * MV3 service worker restarts and >1h download batches.
+ */
+export async function resolveDownloadUrlFromDescriptor(
+  descriptor: DownloadResolutionDescriptor,
+  fetchImpl: typeof fetch = fetch,
+): Promise<string> {
+  const media = await resolveActivityMedia(descriptor.activity, fetchImpl);
+
+  if (descriptor.kind === 'subtitle') {
+    const caption = selectCaptionForDescriptor(media.captions, descriptor);
+    if (!caption?.vttUrl) {
+      throw new Error('Requested WebVTT subtitle track is no longer available.');
+    }
+    return validateAllowedMediaUrl(caption.vttUrl, ALLOWED_MEDIA_ORIGINS);
+  }
+
+  const flavor = selectFlavorForDescriptor(media.flavors, descriptor);
+  const rawUrl = flavor?.downloadUrl ?? media.directMp4Url;
+  if (!rawUrl) {
+    throw new Error('No downloadable MP4 stream is available for this lecture.');
+  }
+  return validateAllowedMediaUrl(rawUrl, ALLOWED_MEDIA_ORIGINS);
+}
+
+let activeDownloadManager: DownloadManager | null = null;
+
+function getDownloadManager(): DownloadManager {
+  if (!activeDownloadManager) {
+    activeDownloadManager = new DownloadManager({
+      api: createChromeDownloadsAdapter(),
+      storage: createSessionQueueStorageAdapter(),
+      maxConcurrent: DEFAULT_MAX_CONCURRENT_DOWNLOADS,
+      resolveDownloadUrl: (descriptor) => resolveDownloadUrlFromDescriptor(descriptor),
+      allowedOrigins: ALLOWED_MEDIA_ORIGINS,
+      onStateChange(state) {
+        void broadcastEvent({ type: 'QUEUE_UPDATED', state });
+      },
+    });
+  }
+  return activeDownloadManager;
+}
+
+async function configureSidePanelBehavior(): Promise<void> {
+  try {
+    if (chrome.sidePanel?.setPanelBehavior) {
+      await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+    }
+  } catch (err) {
+    console.error('[moodle-sw] Failed to configure sidePanel behavior:', sanitizeErrorMessage(err));
+  }
+}
+
+export async function handleMessage(
+  request: ExtensionRequest,
+): Promise<ExtensionResponse<ExtensionRequest['type']>> {
+  const manager = getDownloadManager();
+
+  switch (request.type) {
+    case 'GET_SESSION_STATUS': {
+      const session = await fetchMoodleSession(DEFAULT_MOODLE_BASE_URL);
+      await writeSsoProbeState({
+        lastKnownAuthenticated: session.authenticated,
+        ...(session.authenticated ? { awaitingSsoLogin: false } : {}),
+      });
+      return { ok: true, session: toPublicSession(session) };
+    }
+
+    case 'OPEN_SSO_LOGIN': {
+      const loginUrl = `${DEFAULT_MOODLE_BASE_URL}${UNIPD_SHIBBOLETH_LOGIN_PATH}`;
+      await writeSsoProbeState({ awaitingSsoLogin: true });
+      const tab = await chrome.tabs.create({ url: loginUrl, active: true });
+      return { ok: true, opened: true, tabId: tab.id ?? null };
+    }
+
+    case 'LIST_COURSES': {
+      const session = await fetchMoodleSession(DEFAULT_MOODLE_BASE_URL);
+      await writeSsoProbeState({
+        lastKnownAuthenticated: session.authenticated,
+        ...(session.authenticated ? { awaitingSsoLogin: false } : {}),
+      });
+      if (!session.authenticated || !session.sesskey) {
+        throw new Error('Not signed in to UniPD Moodle. Please log in with UniPD SSO first.');
+      }
+      const courses = await fetchEnrolledCourses(DEFAULT_MOODLE_BASE_URL, session.sesskey);
+      return { ok: true, courses };
+    }
+
+    case 'SCAN_COURSE_LECTURES': {
+      const html = await fetchCoursePageHtml(DEFAULT_MOODLE_BASE_URL, request.courseId);
+      const sections = parseCourseSectionsFromHtml(html, request.courseId, DEFAULT_MOODLE_BASE_URL);
+      return { ok: true, courseId: request.courseId, sections };
+    }
+
+    case 'RESOLVE_LECTURE_MEDIA': {
+      const media = await resolveActivityMedia(request.activity);
+      return { ok: true, media: toPublicLectureMedia(media) };
+    }
+
+    case 'ENQUEUE_DOWNLOADS': {
+      const enqueuedIds = await manager.enqueue(request.items);
+      const state = manager.getState();
+      return { ok: true, enqueuedIds, state };
+    }
+
+    case 'GET_QUEUE_STATE': {
+      const state = await manager.refreshActiveProgress();
+      return { ok: true, state };
+    }
+
+    case 'CANCEL_DOWNLOAD': {
+      const state = await manager.cancel(request.taskId);
+      return { ok: true, state };
+    }
+
+    case 'CLEAR_FINISHED_DOWNLOADS': {
+      const state = await manager.clearFinished();
+      return { ok: true, state };
+    }
+
+    default: {
+      const unknownType = (request as { type?: unknown }).type;
+      return {
+        ok: false,
+        error: `Unsupported extension message type: ${String(unknownType)}`,
+      };
+    }
+  }
+}
+
+function registerServiceWorkerListeners(): void {
+  void configureSidePanelBehavior();
+
+  chrome.runtime.onInstalled.addListener(() => {
+    void configureSidePanelBehavior();
+  });
+
+  chrome.downloads.onChanged.addListener((delta) => {
+    void (async () => {
+      try {
+        await getDownloadManager().handleDownloadDelta({
+          id: delta.id,
+          state: delta.state,
+          error: delta.error,
+        });
+      } catch {
+        // Non-fatal if storage/download query fails during delta reconciliation
+      }
+    })();
+  });
+
+  chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
+    if (changeInfo.status !== 'complete' || !tab.url) {
+      return;
+    }
+    if (!isMoodlePostLoginUrl(tab.url, DEFAULT_MOODLE_BASE_URL)) {
+      return;
+    }
+
+    void (async () => {
+      try {
+        const shouldProbe = await shouldProbeSessionOnTabUpdate();
+        if (!shouldProbe) {
+          return;
+        }
+        const session = await fetchMoodleSession(DEFAULT_MOODLE_BASE_URL);
+        await writeSsoProbeState({
+          lastKnownAuthenticated: session.authenticated,
+          ...(session.authenticated ? { awaitingSsoLogin: false } : {}),
+        });
+        if (session.authenticated) {
+          await broadcastEvent({
+            type: 'SESSION_UPDATED',
+            session: toPublicSession(session),
+          });
+        }
+      } catch {
+        // Ignore transient network errors during tab refresh
+      }
+    })();
+  });
+
+  chrome.runtime.onMessage.addListener((message: ExtensionRequest, sender, sendResponse) => {
+    if (sender.id !== chrome.runtime.id) {
+      return false;
+    }
+    if (!message || typeof message !== 'object' || typeof message.type !== 'string') {
+      return false;
+    }
+
+    void (async () => {
+      try {
+        const response = await handleMessage(message);
+        sendResponse(response);
+      } catch (err) {
+        sendResponse({
+          ok: false,
+          error: sanitizeErrorMessage(err),
+        });
+      }
+    })();
+
+    return true;
+  });
+}
+
+if (typeof chrome !== 'undefined' && chrome.runtime?.onMessage) {
+  registerServiceWorkerListeners();
+}
