@@ -1,3 +1,7 @@
+import {
+  MAX_RELATIVE_DOWNLOAD_PATH_LENGTH,
+  sanitizePathSegment,
+} from '../core/path-builder.js';
 import type {
   DownloadKind,
   DownloadQueueItem,
@@ -65,7 +69,15 @@ export interface QueueStorageAdapter {
   save(entries: PersistedDownloadEntry[]): Promise<void>;
 }
 
-export type DownloadUrlResolver = (descriptor: DownloadResolutionDescriptor) => Promise<string>;
+export interface ResolvedDownloadTarget {
+  url: string;
+  resolvedFilename?: string;
+  resolvedSizeBytes?: number;
+}
+
+export type DownloadUrlResolver = (
+  descriptor: DownloadResolutionDescriptor,
+) => Promise<string | ResolvedDownloadTarget>;
 
 interface InternalDownloadEntry {
   item: DownloadQueueItem;
@@ -204,10 +216,63 @@ function cloneDescriptor(
   if (!descriptor) {
     return null;
   }
+  if (descriptor.kind === 'material') {
+    return {
+      ...descriptor,
+      material: { ...descriptor.material },
+      ...(descriptor.pathContext ? { pathContext: { ...descriptor.pathContext } } : {}),
+    };
+  }
   return {
     ...descriptor,
     activity: { ...descriptor.activity },
   };
+}
+
+function sanitizeResolvedRelativePath(rawPath: string): string {
+  const parts = rawPath
+    .replace(/\\/g, '/')
+    .split('/')
+    .map((p) => p.trim())
+    .filter((p) => p.length > 0 && p !== '.' && p !== '..');
+
+  if (parts.length === 0) {
+    return 'UniPD/material.bin';
+  }
+
+  const last = parts.pop()!;
+  const cleanDirs = parts.map((dir) => sanitizePathSegment(dir, 80));
+
+  const dotIdx = last.lastIndexOf('.');
+  const rawStem = dotIdx > 0 ? last.slice(0, dotIdx) : last;
+  const rawExt =
+    dotIdx > 0 && dotIdx < last.length - 1
+      ? last
+          .slice(dotIdx + 1)
+          .replace(/[^a-zA-Z0-9]/g, '')
+          .toLowerCase()
+      : 'bin';
+  const ext = rawExt || 'bin';
+  let cleanStem = sanitizePathSegment(rawStem, 90);
+
+  const assemble = () => [...cleanDirs, `${cleanStem}.${ext}`].join('/');
+  let full = assemble();
+  if (full.length > MAX_RELATIVE_DOWNLOAD_PATH_LENGTH) {
+    const excess = full.length - MAX_RELATIVE_DOWNLOAD_PATH_LENGTH;
+    const targetStemLen = Math.max(4, cleanStem.length - excess);
+    cleanStem = sanitizePathSegment(cleanStem.slice(0, targetStemLen), targetStemLen);
+    full = assemble();
+  }
+  while (full.length > MAX_RELATIVE_DOWNLOAD_PATH_LENGTH && cleanDirs.length > 1) {
+    cleanDirs.splice(Math.floor(cleanDirs.length / 2), 1);
+    full = assemble();
+  }
+  if (full.length > MAX_RELATIVE_DOWNLOAD_PATH_LENGTH) {
+    const maxFileLen = Math.max(6, MAX_RELATIVE_DOWNLOAD_PATH_LENGTH - ext.length - 1);
+    cleanStem = sanitizePathSegment(cleanStem.slice(0, maxFileLen), maxFileLen);
+    full = `${cleanStem}.${ext}`.slice(0, MAX_RELATIVE_DOWNLOAD_PATH_LENGTH);
+  }
+  return full;
 }
 
 /**
@@ -332,6 +397,11 @@ export class DownloadManager {
         activeKeys.add(
           makeDedupeKey(existing.item.cmid, existing.item.kind, existing.item.filename),
         );
+        if (existing.descriptor?.filename && existing.descriptor.filename !== existing.item.filename) {
+          activeKeys.add(
+            makeDedupeKey(existing.item.cmid, existing.item.kind, existing.descriptor.filename),
+          );
+        }
       }
     }
 
@@ -534,9 +604,23 @@ export class DownloadManager {
       }
 
       try {
-        const rawUrl = await this.resolveDownloadUrl(descriptor);
+        const resolved = await this.resolveDownloadUrl(descriptor);
         if (this.isEntryCancelled(nextEntry)) {
           continue;
+        }
+
+        const rawUrl = typeof resolved === 'string' ? resolved : resolved.url;
+        if (typeof resolved !== 'string') {
+          if (resolved.resolvedFilename) {
+            nextEntry.item.filename = sanitizeResolvedRelativePath(resolved.resolvedFilename);
+          }
+          if (
+            typeof resolved.resolvedSizeBytes === 'number' &&
+            resolved.resolvedSizeBytes > 0 &&
+            nextEntry.item.totalBytes === 0
+          ) {
+            nextEntry.item.totalBytes = resolved.resolvedSizeBytes;
+          }
         }
 
         const safeUrl = validateAllowedMediaUrl(rawUrl, this.allowedOrigins);

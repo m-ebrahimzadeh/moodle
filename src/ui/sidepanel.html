@@ -74,11 +74,11 @@
           </div>
         </section>
 
-        <!-- Course Lecture Checklist Section -->
+        <!-- Course Content (Videos & Materials) Section -->
         <section id="lectures-panel" class="panel" aria-labelledby="lectures-heading" hidden>
           <div class="panel-header">
             <div class="lecture-heading-wrap">
-              <h2 id="lectures-heading">Course Lectures</h2>
+              <h2 id="lectures-heading">Course Content</h2>
               <p id="selected-course-label" class="muted-caption"></p>
             </div>
             <button id="rescan-course-btn" type="button" class="btn btn-ghost btn-sm">
@@ -86,35 +86,82 @@
             </button>
           </div>
 
-          <div class="toolbar">
-            <div class="toolbar-group">
-              <button id="select-all-btn" type="button" class="btn btn-ghost btn-sm">
-                Select all
-              </button>
-              <button id="select-none-btn" type="button" class="btn btn-ghost btn-sm">
-                Clear
-              </button>
-            </div>
-
-            <div class="toolbar-group">
-              <label class="inline-control" for="default-quality-select">
-                <span>Quality</span>
-                <select id="default-quality-select">
-                  <option value="highest">Highest</option>
-                  <option value="1080p">1080p</option>
-                  <option value="720p">720p</option>
-                  <option value="360p">360p</option>
-                </select>
-              </label>
-
-              <label class="checkbox-label" for="include-vtt-toggle">
-                <input id="include-vtt-toggle" type="checkbox" checked />
-                <span>Include .vtt</span>
-              </label>
-            </div>
+          <div class="content-tabs" role="tablist" aria-label="Course content categories">
+            <button
+              id="tab-videos"
+              type="button"
+              class="content-tab"
+              role="tab"
+              aria-selected="true"
+              tabindex="0"
+            >
+              Videos (0)
+            </button>
+            <button
+              id="tab-materials"
+              type="button"
+              class="content-tab"
+              role="tab"
+              aria-selected="false"
+              tabindex="-1"
+            >
+              Materials (0)
+            </button>
           </div>
 
-          <div id="lectures-container" class="lectures-container"></div>
+          <div id="videos-tabpanel" class="content-tabpanel" role="tabpanel" aria-labelledby="tab-videos">
+            <div class="toolbar">
+              <div class="toolbar-group">
+                <button id="select-all-btn" type="button" class="btn btn-ghost btn-sm">
+                  Select all
+                </button>
+                <button id="select-none-btn" type="button" class="btn btn-ghost btn-sm">
+                  Clear
+                </button>
+              </div>
+
+              <div class="toolbar-group">
+                <label class="inline-control" for="default-quality-select">
+                  <span>Quality</span>
+                  <select id="default-quality-select">
+                    <option value="highest">Highest</option>
+                    <option value="1080p">1080p</option>
+                    <option value="720p">720p</option>
+                    <option value="360p">360p</option>
+                  </select>
+                </label>
+
+                <label class="checkbox-label" for="include-vtt-toggle">
+                  <input id="include-vtt-toggle" type="checkbox" checked />
+                  <span>Include .vtt</span>
+                </label>
+              </div>
+            </div>
+
+            <div id="lectures-container" class="lectures-container"></div>
+          </div>
+
+          <div
+            id="materials-tabpanel"
+            class="content-tabpanel"
+            role="tabpanel"
+            aria-labelledby="tab-materials"
+            hidden
+          >
+            <div class="toolbar">
+              <div class="toolbar-group">
+                <button id="materials-select-all-btn" type="button" class="btn btn-ghost btn-sm">
+                  Select all
+                </button>
+                <button id="materials-select-none-btn" type="button" class="btn btn-ghost btn-sm">
+                  Clear
+                </button>
+              </div>
+              <span class="muted-caption">PDFs, slides, datasets &amp; folders</span>
+            </div>
+
+            <div id="materials-container" class="lectures-container"></div>
+          </div>
 
           <div class="action-bar">
             <div class="selection-summary">
